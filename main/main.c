@@ -1,0 +1,72 @@
+#include <stdbool.h>
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "imu660rc.h"
+
+static const char *TAG = "imu_app";
+static const int64_t YAW_SETTLE_US = 3000000;
+
+void app_main(void)
+{
+    /* UART0 console: 115200 8N1. TX=GPIO43, RX=GPIO44 on ESP32-S3.
+     * Keep the module stationary for a few seconds after power-on. */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    const imu660rc_config_t config = IMU660RC_CONFIG_DEFAULT();
+    imu660rc_handle_t imu = NULL;
+    esp_err_t err;
+    while ((err = imu660rc_init(&config, &imu)) != ESP_OK) {
+        ESP_LOGE(TAG, "IMU init failed: %s; retry in 1 s", esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    ESP_LOGI(TAG, "Keep IMU stationary for 3 s; recording startup yaw as zero.");
+    int64_t settle_until_us = esp_timer_get_time() + YAW_SETTLE_US;
+    float yaw_zero_deg = 0.0f;
+    bool yaw_zeroed = false;
+    int64_t last_print_us = 0;
+    int64_t last_warning_us = 0;
+    while (1) {
+        imu660rc_sample_t sample;
+        /* ISR only wakes this task; all SPI reads happen in task context. */
+        err = imu660rc_read(imu, &sample, 1000);
+        const int64_t now_us = esp_timer_get_time();
+        if (err != ESP_OK) {
+            /* Require a fresh settling period if startup data is interrupted. */
+            if (!yaw_zeroed) {
+                settle_until_us = now_us + YAW_SETTLE_US;
+            }
+            if (now_us - last_warning_us >= 1000000) {
+                ESP_LOGW(TAG, "No valid IMU sample: %s; check INT2 -> GPIO%d and SPI wiring",
+                         esp_err_to_name(err), (int)config.int2_gpio);
+                last_warning_us = now_us;
+            }
+            continue;
+        }
+        if (!yaw_zeroed) {
+            if (now_us < settle_until_us) {
+                continue;
+            }
+            yaw_zero_deg = sample.yaw_deg;
+            yaw_zeroed = true;
+            ESP_LOGI(TAG, "Yaw zero recorded: %.2f deg; output range [-180, 180).",
+                     (double)yaw_zero_deg);
+        }
+        /* The driver retains its original 0..360 degree output. Only the
+         * business-layer yaw is relative to the startup heading. */
+        float yaw_relative_deg = sample.yaw_deg - yaw_zero_deg;
+        if (yaw_relative_deg >= 180.0f) {
+            yaw_relative_deg -= 360.0f;
+        } else if (yaw_relative_deg < -180.0f) {
+            yaw_relative_deg += 360.0f;
+        }
+        /* Read at the sensor's 120 Hz, print at most 20 Hz. */
+        if (now_us - last_print_us >= 50000) {
+            printf("roll=%.2f,pitch=%.2f,yaw=%.2f\r\n",
+                   (double)sample.roll_deg, (double)sample.pitch_deg,
+                   (double)yaw_relative_deg);
+            last_print_us = now_us;
+        }
+    }
+}

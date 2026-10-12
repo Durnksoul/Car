@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>陀螺仪姿态 · IMU660RC</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <div><p class="eyebrow">ESP32-S3 / IMU660RC</p><h1>陀螺仪姿态</h1><p class="subtitle">通过串口，观察传感器的实时方向。</p></div>
+      <span class="local-label">本地查看</span>
+    </header>
+    <section class="connection" aria-label="串口连接">
+      <div class="connection-state"><span id="status-dot" class="status-dot"></span><div><strong id="status" role="status">未连接</strong><span id="connection-note">连接前，请关闭 VS Code 串口监视器。</span></div></div>
+      <div class="controls"><label>波特率<select id="baud"><option>115200</option><option>9600</option><option>57600</option><option>230400</option></select></label><button id="demo" class="secondary">查看演示</button><button id="connect" class="primary">连接串口</button></div>
+    </section>
+    <p id="message" class="message" role="alert" hidden></p>
+    <div class="dashboard">
+      <section class="scene-panel" aria-label="三维姿态模型">
+        <div class="panel-heading"><h2>当前姿态</h2><span id="source-label">等待数据</span></div>
+        <div class="scene"><canvas id="attitude" aria-label="随 Roll、Pitch、Yaw 旋转的传感器模型"></canvas><div id="scene-overlay" class="scene-overlay">连接串口，开始观察</div><span id="demo-label" class="demo-label" hidden>演示数据 · 未连接硬件</span></div>
+        <div class="scene-footer"><div class="legend"><span><i class="x"></i>X</span><span><i class="y"></i>Y</span><span><i class="z"></i>Z</span></div><span id="rate">— 帧/秒</span></div>
+      </section>
+      <section class="angles" aria-label="姿态角度">
+        <article class="angle-card roll"><div class="angle-title"><h2>Roll <span>横滚</span></h2><span class="axis">X 轴</span></div><p class="angle"><span id="roll">—</span><small>°</small></p><div class="track"><span id="roll-indicator"></span></div><p class="angle-caption">绕 X 轴的倾斜</p></article>
+        <article class="angle-card pitch"><div class="angle-title"><h2>Pitch <span>俯仰</span></h2><span class="axis">Y 轴</span></div><p class="angle"><span id="pitch">—</span><small>°</small></p><div class="track"><span id="pitch-indicator"></span></div><p class="angle-caption">绕 Y 轴的倾斜</p></article>
+        <article class="angle-card yaw"><div class="angle-title"><h2>Yaw <span>航向</span></h2><span class="axis">Z 轴</span></div><p class="angle"><span id="yaw">—</span><small>°</small></p><div class="track"><span id="yaw-indicator"></span></div><p class="angle-caption">相对上电朝向的转角</p></article>
+      </section>
+    </div>
+    <section class="help"><span class="help-icon" aria-hidden="true">i</span><p>上电后保持静止 3 秒，等待 Yaw 归零，再转动模块。模型坐标轴按模块丝印显示；Yaw 范围为 −180°～180°。</p></section>
+    <details class="serial-log"><summary>串口消息 <span>查看启动提示与原始数据</span></summary><pre id="log" aria-label="最近收到的串口消息">尚未收到串口消息。</pre></details>
+    <footer>选择串口窗口没有弹出？<button id="open-browser" class="secondary">用独立浏览器打开</button><br>数据仅在这台电脑上显示。推荐使用桌面版 Chrome 或 Edge。</footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
