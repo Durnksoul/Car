@@ -5,12 +5,27 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "imu660rc.h"
+#include "sdkconfig.h"
+#include "tb6612_scope_test.h"
+#include "car_motor_control.h"
 
 static const char *TAG = "imu_app";
 static const int64_t YAW_SETTLE_US = 3000000;
 
 void app_main(void)
 {
+#if CONFIG_CAR_MOTOR_CONTROL
+    esp_err_t motor_err = car_motor_control_start();
+    if (motor_err != ESP_OK) {
+        ESP_LOGE(TAG, "Motor/encoder control init failed: %s", esp_err_to_name(motor_err));
+    }
+#elif CONFIG_CAR_TB6612_SCOPE_TEST
+    /* Independent serial command task; starts in standby even without an IMU. */
+    esp_err_t motor_err = tb6612_scope_test_start();
+    if (motor_err != ESP_OK) {
+        ESP_LOGE(TAG, "TB6612 serial control init failed: %s", esp_err_to_name(motor_err));
+    }
+#endif
     /* UART0 console: 115200 8N1. TX=GPIO43, RX=GPIO44 on ESP32-S3.
      * Keep the module stationary for a few seconds after power-on. */
     vTaskDelay(pdMS_TO_TICKS(300));

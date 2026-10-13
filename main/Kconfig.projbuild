@@ -1,0 +1,30 @@
+menu "Car control"
+
+config CAR_MOTOR_CONTROL
+    bool "Enable encoder and serial motor control (standby at boot)"
+    default y
+    help
+        Both motor channels remain in standby after initialization.
+        Send enable, then a/b/ab percentage commands to start motors.
+        Left encoder GPIO17/18, right encoder GPIO1/2. UART/USB accept
+        motor commands. Disconnect retains output.
+
+config CAR_BLE_UART
+    bool "Enable BLE UART command input"
+    default n
+    depends on CAR_MOTOR_CONTROL && BT_NIMBLE_ENABLED
+    help
+        Optional Nordic UART Service command input and encoder notifications.
+        Disabled while using an external wireless UART bridge.
+
+config CAR_TB6612_SCOPE_TEST
+    bool "Enable TB6612FNG serial command control for scope tests (no motors)"
+    default n
+    depends on !CAR_MOTOR_CONTROL
+    help
+        Starts in standby and accepts serial commands to control both motor
+        channels, independently of the IMU. Waveforms hold until the next command.
+        Intended for oscilloscope tests WITHOUT motors attached.
+        Disable before implementing another motor controller.
+
+endmenu
