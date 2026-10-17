@@ -1,4 +1,5 @@
 #include "car_motor_control.h"
+#include "car_log_mode.h"
 #include "car_encoder.h"
 #include "sdkconfig.h"
 #if CONFIG_CAR_BLE_UART
@@ -8,6 +9,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <math.h>
 #include "esp_timer.h"
 
 #include <errno.h>
@@ -35,6 +37,9 @@ typedef struct {
     bool enabled;
     tb6612_command_kind_t mode[2];
     int percent[2];
+    balance_controller_t balance;
+    balance_output_t balance_output;
+    bool trim_confirmed;
 } control_t;
 
 #if CONFIG_CAR_BLE_UART
@@ -44,6 +49,35 @@ static car_encoder_sample_t encoder;
 static int64_t encoder_us;
 static portMUX_TYPE snapshot_lock = portMUX_INITIALIZER_UNLOCKED;
 static car_motor_snapshot_t snapshot;
+typedef struct {
+    int64_t us;
+    float tilt, rate, yaw_rate;
+    bool valid;
+} imu_input_t;
+static imu_input_t latest_imu;
+
+void car_motor_control_imu(int64_t sample_us, float tilt_deg, float tilt_rate_dps,
+                           float yaw_rate_dps, bool valid)
+{
+    const imu_input_t next = {sample_us, tilt_deg, tilt_rate_dps, yaw_rate_dps, valid};
+    portENTER_CRITICAL(&snapshot_lock);
+    latest_imu = next;
+    portEXIT_CRITICAL(&snapshot_lock);
+}
+
+static balance_input_t balance_input(bool *valid)
+{
+    imu_input_t imu;
+    portENTER_CRITICAL(&snapshot_lock);
+    imu = latest_imu;
+    portEXIT_CRITICAL(&snapshot_lock);
+    *valid = imu.valid;
+    return (balance_input_t){
+        .now_us = esp_timer_get_time(), .imu_us = imu.us, .encoder_us = encoder_us,
+        .tilt_deg = imu.tilt, .tilt_rate_dps = imu.rate, .yaw_rate_dps = imu.yaw_rate,
+        .left_cps = encoder.cps[0], .right_cps = encoder.cps[1],
+    };
+}
 
 static void publish_snapshot(const control_t *control)
 {
@@ -51,6 +85,8 @@ static void publish_snapshot(const control_t *control)
         .encoder = encoder, .encoder_us = encoder_us, .enabled = control->enabled,
         .command_percent = {control->percent[0], control->percent[1]},
         .braking = {control->mode[0] == TB_CMD_BRAKE, control->mode[1] == TB_CMD_BRAKE},
+        .balance = control->balance_output,
+        .balance_trim_deg = control->balance.config.trim_deg,
     };
     portENTER_CRITICAL(&snapshot_lock);
     snapshot = next;
@@ -68,6 +104,8 @@ bool car_motor_control_snapshot(car_motor_snapshot_t *out)
 
 static void reply(const char *format, ...)
 {
+    /* Commands still execute; temporarily emit encoder records only. */
+    if (CAR_ENCODER_ONLY_LOG && strncmp(format, "enc_left=", 9) != 0) return;
     char text[200];
     va_list args;
     va_start(args, format);
@@ -96,7 +134,9 @@ static void print_help(void)
     reply("coast a|b|all | brake a|b|all");
     reply("Boot: STANDBY; send enable, then ab 20 20 to start both motors");
     reply("PWM=20kHz, 0=coast, +/-100=HIGH; holds until next command");
-    reply("Logical forward: A normal, B reversed; encoder signs still require confirmation");
+    reply("Logical forward: A normal, B reversed; both encoders forward-positive");
+    reply("balance zero | arm | off | status | motor <1|-1>");
+    reply("pid attitude|speed <Kp> <Ki> <Kd> | pid show (standby only)");
 }
 
 static void print_status(const control_t *control)
@@ -127,12 +167,151 @@ static void clear_commands(control_t *control)
     }
 }
 
+static esp_err_t balance_stop(control_t *control, balance_state_t state)
+{
+    balance_controller_disarm(&control->balance);
+    control->balance.state = state;
+    control->balance_output = (balance_output_t){.state = state};
+    esp_err_t err = tb6612fng_enable(control->motor, false);
+    control->enabled = false;
+    clear_commands(control);
+    return err;
+}
+
+static void balance_status(const control_t *c)
+{
+    const balance_config_t *cfg = &c->balance.config;
+    reply("balance_state=%d,trim=%.3f,trim_set=%d,motor_sign=%d,limit=%.1f",
+          c->balance.state, (double)cfg->trim_deg, c->trim_confirmed,
+          cfg->attitude_to_motor_sign, (double)cfg->max_output_percent);
+    reply("pid attitude %.4f %.4f %.4f; speed %.5f %.5f %.5f",
+          (double)cfg->attitude.kp, (double)cfg->attitude.ki, (double)cfg->attitude.kd,
+          (double)cfg->speed.kp, (double)cfg->speed.ki, (double)cfg->speed.kd);
+}
+
+/* Exact token matching rejects trailing arguments rather than partly applying them. */
+static bool balance_command(control_t *c, const char *line)
+{
+    char verb[16], arg[16], extra;
+    int tokens = sscanf(line, "%15s %15s %c", verb, arg, &extra);
+    if (tokens < 1 || (strcmp(verb, "balance") && strcmp(verb, "pid"))) return false;
+    if (tokens == 2 && ((!strcmp(verb, "balance") && !strcmp(arg, "status")) ||
+                         (!strcmp(verb, "pid") && !strcmp(arg, "show")))) {
+        balance_status(c);
+        return true;
+    }
+    if (tokens == 2 && !strcmp(verb, "balance") && !strcmp(arg, "off")) {
+        esp_err_t err = balance_stop(c, BALANCE_DISARMED);
+        reply("balance off: %s", esp_err_to_name(err));
+        return true;
+    }
+    bool valid;
+    balance_input_t in = balance_input(&valid);
+    if (tokens == 2 && !strcmp(verb, "balance") && !strcmp(arg, "arm")) {
+        if (c->enabled || !c->trim_confirmed || !valid || !balance_controller_arm(&c->balance, &in)) {
+            reply("ERR: arm requires standby, balance zero, Kp>0 and fresh upright sensors");
+            return true;
+        }
+        /* Disabling also clears stale manual output before enabling the bridge. */
+        esp_err_t err = tb6612fng_enable(c->motor, false);
+        if (err == ESP_OK) err = tb6612fng_enable(c->motor, true);
+        if (err != ESP_OK) {
+            (void)balance_stop(c, BALANCE_FAULT_INPUT);
+            reply("ERR: arm motor %s", esp_err_to_name(err));
+        } else {
+            clear_commands(c);
+            c->enabled = true;
+            c->balance_output = (balance_output_t){.state = BALANCE_ARMED};
+            reply("OK: balance armed; hold the car for direction test");
+        }
+        return true;
+    }
+    if (c->enabled) {
+        reply("ERR: send standby or balance off before changing PID/zero");
+        return true;
+    }
+    balance_config_t cfg = c->balance.config;
+    if (tokens == 2 && !strcmp(verb, "balance") && !strcmp(arg, "zero")) {
+        if (!valid || in.imu_us <= 0 || in.encoder_us <= 0 ||
+            in.now_us < in.imu_us || in.now_us - in.imu_us > 50000 ||
+            in.now_us < in.encoder_us || in.now_us - in.encoder_us > 100000 ||
+            !isfinite(in.tilt_deg) || fabsf(in.tilt_deg) > 15 ||
+            !isfinite(in.tilt_rate_dps) || fabsf(in.tilt_rate_dps) > 3 ||
+            fabsf(in.left_cps) > 10 || fabsf(in.right_cps) > 10) {
+            reply("ERR: hold car upright and stationary with fresh sensors for balance zero");
+            return true;
+        }
+        cfg.trim_deg = in.tilt_deg;
+        if (balance_controller_init(&c->balance, &cfg)) {
+            c->trim_confirmed = true;
+            c->balance_output = (balance_output_t){0};
+            reply("OK: upright trim=%.3f deg (RAM only)", (double)cfg.trim_deg);
+        }
+        return true;
+    }
+    int sign;
+    if (sscanf(line, "balance motor %d %c", &sign, &extra) == 1 &&
+        (sign == -1 || sign == 1)) {
+        cfg.attitude_to_motor_sign = sign;
+    } else {
+        float kp, ki, kd;
+        if (sscanf(line, "pid %15s %f %f %f %c", arg, &kp, &ki, &kd, &extra) != 4 ||
+            (strcmp(arg, "attitude") && strcmp(arg, "speed")) ||
+            !isfinite(kp) || !isfinite(ki) || !isfinite(kd) ||
+            kp < 0 || ki < 0 || kd < 0 || kp > 100 || ki > 100 || kd > 100) {
+            reply("ERR: balance zero|arm|off|status|motor +/-1; pid attitude|speed Kp Ki Kd");
+            return true;
+        }
+        pid_config_t *pid = !strcmp(arg, "attitude") ? &cfg.attitude : &cfg.speed;
+        pid->kp = kp; pid->ki = ki; pid->kd = kd;
+    }
+    if (balance_controller_init(&c->balance, &cfg)) {
+        c->balance_output = (balance_output_t){0};
+        balance_status(c);
+    } else reply("ERR: invalid balance configuration");
+    return true;
+}
+
+static esp_err_t balance_tick(control_t *c)
+{
+    if (c->balance.state != BALANCE_ARMED) return ESP_OK;
+    bool valid;
+    balance_input_t in = balance_input(&valid);
+    balance_state_t failure = BALANCE_DISARMED;
+    if (!valid) failure = BALANCE_FAULT_INPUT;
+    else if (in.now_us < in.imu_us || in.now_us - in.imu_us > 50000 ||
+             in.now_us < in.encoder_us || in.now_us - in.encoder_us > 100000)
+        failure = BALANCE_FAULT_STALE;
+    if (failure != BALANCE_DISARMED) {
+        reply("balance fault=%d; STANDBY", failure);
+        return balance_stop(c, failure);
+    }
+    /* The mailbox may still contain the previous sample: do not integrate twice. */
+    if (in.imu_us == c->balance.previous_imu_us) return ESP_OK;
+    if (!balance_controller_update(&c->balance, &in, &c->balance_output)) {
+        failure = c->balance.state;
+        reply("balance fault=%d; STANDBY", failure);
+        return balance_stop(c, failure);
+    }
+    int left = (int)lroundf(c->balance_output.left_percent * 10);
+    int right = (int)lroundf(c->balance_output.right_percent * 10);
+    esp_err_t err = tb6612fng_set_speeds(c->motor,
+                                      left * motor_direction[0], right * motor_direction[1]);
+    if (err != ESP_OK) return err;
+    c->percent[0] = (int)lroundf(c->balance_output.left_percent);
+    c->percent[1] = (int)lroundf(c->balance_output.right_percent);
+    c->mode[0] = c->mode[1] = TB_CMD_SPEED;
+    return ESP_OK;
+}
+
 static esp_err_t apply_command(control_t *control, const tb6612_command_t *command)
 {
     esp_err_t err = ESP_OK;
     if (command->kind == TB_CMD_HELP) { print_help(); return ESP_OK; }
     if (command->kind == TB_CMD_STATUS) { print_status(control); print_encoder(); return ESP_OK; }
     if (command->kind == TB_CMD_ENCODER) { print_encoder(); return ESP_OK; }
+    if (command->kind == TB_CMD_STANDBY) return balance_stop(control, BALANCE_DISARMED);
+    if (control->balance.state == BALANCE_ARMED) return ESP_ERR_INVALID_STATE;
     if (command->kind == TB_CMD_ENCODER_ZERO) {
         err = car_encoder_zero();
         if (err != ESP_OK) return err;
@@ -189,12 +368,13 @@ static void receive_line(const char *line, void *argument)
 {
     control_t *control = argument;
     if (!line) { reply("ERR: discarded line (too long or invalid character)"); return; }
+    if (balance_command(control, line)) { publish_snapshot(control); return; }
     tb6612_command_t command;
     esp_err_t err = tb6612_command_parse(line, &command);
     if (err != ESP_OK) { reply("ERR: invalid command; send help"); return; }
     err = apply_command(control, &command);
     publish_snapshot(control);
-    if (err == ESP_ERR_INVALID_STATE) reply("ERR: in standby; send enable first");
+    if (err == ESP_ERR_INVALID_STATE) reply("ERR: standby requires enable; balance mode requires balance off before manual commands");
     else if (err != ESP_OK) reply("ERR: %s", esp_err_to_name(err));
     else reply("OK: %s", line);
 }
@@ -211,6 +391,14 @@ static bool poll_input(int fd, control_t *control, car_command_stream_t *input)
 static void motor_task(void *argument)
 {
     control_t control = {.motor = argument};
+    balance_config_t balance_cfg = balance_config_default();
+    balance_cfg.mapping_confirmed = true;
+    balance_cfg.attitude_to_motor_sign = -1; /* Forward tilt => forward wheel output. */
+    balance_cfg.max_output_percent = 20;
+    balance_cfg.attitude.output_min = -20;
+    balance_cfg.attitude.output_max = 20;
+    balance_cfg.fall_angle_deg = 25;
+    (void)balance_controller_init(&control.balance, &balance_cfg);
     car_command_stream_t primary = {0}, secondary = {0};
 #if CONFIG_CAR_BLE_UART
     car_command_stream_t bluetooth = {0};
@@ -268,9 +456,14 @@ static void motor_task(void *argument)
             print_encoder();
             last_report_us = now;
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        err = balance_tick(&control);
+        if (err != ESP_OK) break;
+        publish_snapshot(&control);
+        vTaskDelay(pdMS_TO_TICKS(2) > 0 ? pdMS_TO_TICKS(2) : 1);
     }
 stopped:
+    balance_controller_disarm(&control.balance);
+    control.balance_output = (balance_output_t){.state = BALANCE_FAULT_INPUT};
     (void)tb6612fng_enable(control.motor, false);
     control.enabled = false;
     clear_commands(&control);

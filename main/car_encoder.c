@@ -7,6 +7,8 @@
 
 /* Motor A = left wheel, motor B = right wheel. */
 static const int pins[2][2] = {{17, 18}, {1, 2}};
+/* Normalize the mirrored right encoder to the left wheel's direction. */
+static const int direction[2] = {1, -1};
 static pcnt_unit_handle_t units[2];
 static pcnt_channel_handle_t channels[2][2];
 static bool enabled[2], started[2];
@@ -45,8 +47,9 @@ esp_err_t car_encoder_init(void)
                 .edge_gpio_num = pins[i][j], .level_gpio_num = pins[i][1 - j],
             };
             TRY(pcnt_new_channel(units[i], &channel, &channels[i][j]));
+            /* Count falling edges only (x2 quadrature); the other phase sets direction. */
             TRY(pcnt_channel_set_edge_action(channels[i][j],
-                j == 0 ? PCNT_CHANNEL_EDGE_ACTION_DECREASE : PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+                PCNT_CHANNEL_EDGE_ACTION_HOLD,
                 j == 0 ? PCNT_CHANNEL_EDGE_ACTION_INCREASE : PCNT_CHANNEL_EDGE_ACTION_DECREASE));
             TRY(pcnt_channel_set_level_action(channels[i][j],
                 PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
@@ -86,6 +89,7 @@ esp_err_t car_encoder_sample(car_encoder_sample_t *out)
         uint32_t difference = (uint32_t)raw[i] - (uint32_t)previous[i];
         int64_t delta = difference <= INT32_MAX ? (int64_t)difference :
                         (int64_t)difference - INT64_C(4294967296);
+        delta *= direction[i];
         totals[i] += delta;
         previous[i] = raw[i];
         out->count[i] = totals[i];

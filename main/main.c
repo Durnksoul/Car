@@ -9,12 +9,15 @@
 #include "sdkconfig.h"
 #include "tb6612_scope_test.h"
 #include "car_motor_control.h"
+#include "car_log_mode.h"
 
 static const char *TAG = "imu_app";
 static const int64_t YAW_SETTLE_US = 3000000;
 
 void app_main(void)
 {
+    /* Runtime application logs only; ROM/bootloader output occurs earlier. */
+    if (CAR_ENCODER_ONLY_LOG) esp_log_level_set("*", ESP_LOG_NONE);
 #if CONFIG_CAR_MOTOR_CONTROL
     esp_err_t motor_err = car_motor_control_start();
     if (motor_err != ESP_OK) {
@@ -52,6 +55,9 @@ void app_main(void)
         err = imu660rc_read(imu, &sample, 1000);
         const int64_t now_us = esp_timer_get_time();
         if (err != ESP_OK) {
+#if CONFIG_CAR_MOTOR_CONTROL
+            car_motor_control_imu(now_us, 0, 0, 0, false);
+#endif
             /* Require a fresh settling period if startup data is interrupted. */
             if (!yaw_zeroed) {
                 settle_until_us = now_us + YAW_SETTLE_US;
@@ -91,16 +97,20 @@ void app_main(void)
             yaw_relative_deg += 360.0f;
         }
         /* Read at the sensor's 120 Hz, print at most 20 Hz. */
-        if (now_us - last_print_us >= 50000) {
+#if CONFIG_CAR_MOTOR_CONTROL
+        car_motor_control_imu(now_us, sample.tilt_deg, sample.tilt_rate_dps,
+                              (float)sample.gyro_raw[2] / 14.2857f, sample.tilt_valid);
+#endif
+        if (!CAR_ENCODER_ONLY_LOG && now_us - last_print_us >= 50000) {
             printf("roll=%.2f,pitch=%.2f,yaw=%.2f\r\n",
                    (double)sample.roll_deg, (double)sample.pitch_deg,
                    (double)yaw_relative_deg);
             last_print_us = now_us;
         }
         /* Separate line preserves the existing viewer's strict roll/pitch/yaw
-         * parser. No mapping from IMU axes to body tilt is assumed here. */
+         * parser. PID uses the independent projected tilt, not these Euler angles. */
 #if CONFIG_CAR_MOTOR_CONTROL
-        if (now_us - last_telemetry_us >= 200000) {
+        if (!CAR_ENCODER_ONLY_LOG && now_us - last_telemetry_us >= 200000) {
             car_motor_snapshot_t motor;
             const bool encoder_valid = car_motor_control_snapshot(&motor);
             printf("telemetry,t_us=%" PRId64 ",roll=%.2f,pitch=%.2f,yaw=%.2f,"
@@ -108,7 +118,9 @@ void app_main(void)
                    "tilt_deg=%.3f,tilt_rate_dps=%.3f,tilt_valid=%d,"
                    "enc_us=%" PRId64 ",enc_valid=%d,enc_left=%" PRId64 ",enc_right=%" PRId64 ","
                    "cps_left=%.2f,cps_right=%.2f,enabled=%d,"
-                   "cmd_left=%d,cmd_right=%d,brake_left=%d,brake_right=%d,balance_active=0\r\n",
+                   "cmd_left=%d,cmd_right=%d,brake_left=%d,brake_right=%d,"
+                   "balance_active=%d,balance_state=%d,trim_deg=%.3f,target_tilt_deg=%.3f,"
+                   "pid_left=%.3f,pid_right=%.3f\r\n",
                    now_us, (double)sample.roll_deg, (double)sample.pitch_deg,
                    (double)yaw_relative_deg,
                    (double)sample.gyro_raw[0] / 14.2857,
@@ -119,7 +131,10 @@ void app_main(void)
                    motor.encoder.count[0], motor.encoder.count[1],
                    (double)motor.encoder.cps[0], (double)motor.encoder.cps[1],
                    motor.enabled, motor.command_percent[0], motor.command_percent[1],
-                   motor.braking[0], motor.braking[1]);
+                   motor.braking[0], motor.braking[1],
+                   motor.balance.state == BALANCE_ARMED, motor.balance.state,
+                   (double)motor.balance_trim_deg, (double)motor.balance.target_tilt_deg,
+                   (double)motor.balance.left_percent, (double)motor.balance.right_percent);
             last_telemetry_us = now_us;
         }
 #endif

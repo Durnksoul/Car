@@ -22,6 +22,7 @@ typedef struct { int low_limit, high_limit; struct { bool accum_count; } flags; 
 typedef struct { int max_glitch_ns; } pcnt_glitch_filter_config_t;
 typedef struct { int edge_gpio_num, level_gpio_num; } pcnt_chan_config_t;
 enum { PCNT_CHANNEL_EDGE_ACTION_DECREASE=-1, PCNT_CHANNEL_EDGE_ACTION_INCREASE=1,
+       PCNT_CHANNEL_EDGE_ACTION_HOLD=0,
        PCNT_CHANNEL_LEVEL_ACTION_KEEP=0, PCNT_CHANNEL_LEVEL_ACTION_INVERSE=1 };
 esp_err_t pcnt_new_unit(const pcnt_unit_config_t *, pcnt_unit_handle_t *);
 esp_err_t pcnt_del_unit(pcnt_unit_handle_t);
@@ -86,6 +87,7 @@ int errors(void) { return configuration_errors; }
 int total_calls(void) { return calls; }
 void reset_mock(int failure) { allocated=nchannels=calls=configuration_errors=0; fail_at=failure; clock_us=0; }
 int get_pin(int channel) { return hwchan[channel].pin; }
+int get_rising(int channel) { return hwchan[channel].rising; }
 int watch_count(int i) { return hardware[i].watches; }
 void cycle(int wheel, int reverse) {
     /* Quadrature phase states: 00,10,11,01,00 (A leads B). */
@@ -135,23 +137,24 @@ reset(0); assert init()==0
 init_calls=calls()
 assert fn("errors",ctypes.c_int)()==0
 assert [fn("get_pin",ctypes.c_int,ctypes.c_int)(i) for i in range(4)]==[17,18,1,2]
+assert [fn("get_rising",ctypes.c_int,ctypes.c_int)(i) for i in range(4)]==[0,0,0,0]
 assert [fn("watch_count",ctypes.c_int,ctypes.c_int)(i) for i in range(2)]==[2,2]
 cycle(0,0); cycle(1,1); fn("tick",None,ctypes.c_int64)(200000)
 out=Sample(); assert sample(ctypes.byref(out))==0
-assert list(out.count)==[4,-4] and list(out.cps)==[20,-20]
-inject(60004,-60004,400000); assert sample(ctypes.byref(out))==0
-assert list(out.count)==[60004,-60004] and list(out.cps)==[300000,-300000]
+assert list(out.count)==[2,2] and list(out.cps)==[10,10]
+inject(60002,-60002,400000); assert sample(ctypes.byref(out))==0
+assert list(out.count)==[60002,60002] and list(out.cps)==[300000,300000]
 assert zero()==0
-inject(60014,-60024,600000); assert sample(ctypes.byref(out))==0
-assert list(out.count)==[10,-20] and list(out.cps)==[50,-100]
+inject(60012,-60022,600000); assert sample(ctypes.byref(out))==0
+assert list(out.count)==[10,20] and list(out.cps)==[50,100]
 deinit(); assert resources()==0 and sample(ctypes.byref(out))==0x103
 # Driver count wrapping is interpreted as a small signed increment/decrement.
 reset(0); assert init()==0
 inject(2147483645,-2147483646,200000); assert sample(ctypes.byref(out))==0
 inject(-2147483645,2147483646,400000); assert sample(ctypes.byref(out))==0
-assert list(out.count)==[2147483651,-2147483650] and list(out.cps)==[30,-20]
+assert list(out.count)==[2147483651,2147483650] and list(out.cps)==[30,20]
 deinit()
 for failure in range(1,init_calls+1):
     reset(failure); assert init()!=0, failure
     assert resources()==0, failure
-print("PASS: GPIO mapping, quadrature configuration, signed x4 counts, CPS, zero, wrap and init failure cleanup")
+print("PASS: GPIO mapping, falling-edge x2 counts, right direction inversion, CPS, zero, wrap and init failure cleanup")
