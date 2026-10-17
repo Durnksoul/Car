@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -42,6 +43,9 @@ void app_main(void)
     bool yaw_zeroed = false;
     int64_t last_print_us = 0;
     int64_t last_warning_us = 0;
+#if CONFIG_CAR_MOTOR_CONTROL
+    int64_t last_telemetry_us = 0;
+#endif
     while (1) {
         imu660rc_sample_t sample;
         /* ISR only wakes this task; all SPI reads happen in task context. */
@@ -53,8 +57,18 @@ void app_main(void)
                 settle_until_us = now_us + YAW_SETTLE_US;
             }
             if (now_us - last_warning_us >= 1000000) {
-                ESP_LOGW(TAG, "No valid IMU sample: %s; check INT2 -> GPIO%d and SPI wiring",
-                         esp_err_to_name(err), (int)config.int2_gpio);
+                if (err == ESP_ERR_TIMEOUT) {
+                    ESP_LOGW(TAG, "IMU interrupt timeout; check INT2 -> GPIO%d and sensor power",
+                             (int)config.int2_gpio);
+                } else if (err == ESP_ERR_INVALID_RESPONSE) {
+                    ESP_LOGW(TAG, "Invalid IMU quaternion; see imu660rc FIFO packet/WHO_AM_I diagnostics; "
+                             "not an INT2 timeout");
+                } else if (err == ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(TAG, "IMU FIFO overrun; discarded batch, waiting for fresh samples");
+                } else {
+                    ESP_LOGW(TAG, "IMU read failed: %s; check SPI and sensor power",
+                             esp_err_to_name(err));
+                }
                 last_warning_us = now_us;
             }
             continue;
@@ -83,5 +97,31 @@ void app_main(void)
                    (double)yaw_relative_deg);
             last_print_us = now_us;
         }
+        /* Separate line preserves the existing viewer's strict roll/pitch/yaw
+         * parser. No mapping from IMU axes to body tilt is assumed here. */
+#if CONFIG_CAR_MOTOR_CONTROL
+        if (now_us - last_telemetry_us >= 200000) {
+            car_motor_snapshot_t motor;
+            const bool encoder_valid = car_motor_control_snapshot(&motor);
+            printf("telemetry,t_us=%" PRId64 ",roll=%.2f,pitch=%.2f,yaw=%.2f,"
+                   "gx_dps=%.3f,gy_dps=%.3f,gz_dps=%.3f,"
+                   "tilt_deg=%.3f,tilt_rate_dps=%.3f,tilt_valid=%d,"
+                   "enc_us=%" PRId64 ",enc_valid=%d,enc_left=%" PRId64 ",enc_right=%" PRId64 ","
+                   "cps_left=%.2f,cps_right=%.2f,enabled=%d,"
+                   "cmd_left=%d,cmd_right=%d,brake_left=%d,brake_right=%d,balance_active=0\r\n",
+                   now_us, (double)sample.roll_deg, (double)sample.pitch_deg,
+                   (double)yaw_relative_deg,
+                   (double)sample.gyro_raw[0] / 14.2857,
+                   (double)sample.gyro_raw[1] / 14.2857,
+                   (double)sample.gyro_raw[2] / 14.2857,
+                   (double)sample.tilt_deg, (double)sample.tilt_rate_dps, sample.tilt_valid,
+                   motor.encoder_us, encoder_valid,
+                   motor.encoder.count[0], motor.encoder.count[1],
+                   (double)motor.encoder.cps[0], (double)motor.encoder.cps[1],
+                   motor.enabled, motor.command_percent[0], motor.command_percent[1],
+                   motor.braking[0], motor.braking[1]);
+            last_telemetry_us = now_us;
+        }
+#endif
     }
 }

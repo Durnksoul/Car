@@ -1,4 +1,5 @@
-set(car_sources "tb6612_scope_test.c" "tb6612_command.c" "main.c")
+set(car_sources "tb6612_scope_test.c" "tb6612_command.c" "main.c"
+                "pid_controller.c" "balance_controller.c")
 set(car_dependencies imu660rc esp_timer tb6612fng esp_driver_uart esp_driver_usb_serial_jtag vfs
                      esp_driver_pcnt bt nvs_flash)
 if(CONFIG_CAR_MOTOR_CONTROL)

@@ -6,22 +6,23 @@
  */
 #include "imu660rc.h"
 #include "imu660rc_math.h"
+#include "imu660rc_fifo.h"
 #include <stdlib.h>
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
 enum {
-    REG_FUNC_CFG_ACCESS = 0x01, REG_PAGE_SEL = 0x02,
+    REG_FUNC_CFG_ACCESS = 0x01,
     REG_EMB_FUNC_EN_A = 0x04, REG_FIFO_CTRL1 = 0x07,
-    REG_PAGE_ADDRESS = 0x08, REG_PAGE_VALUE = 0x09,
     REG_FIFO_CTRL4 = 0x0a, REG_INT2_CTRL = 0x0e,
     REG_WHO_AM_I = 0x0f, REG_CTRL1 = 0x10, REG_CTRL2 = 0x11,
     REG_CTRL3 = 0x12, REG_CTRL4 = 0x13, REG_CTRL6 = 0x15,
     REG_CTRL7 = 0x16, REG_CTRL8 = 0x17, REG_CTRL9 = 0x18,
-    REG_OUTX_L_G = 0x22, REG_PAGE_RW = 0x17,
+    REG_OUTX_L_G = 0x22,
     REG_EMB_FUNC_FIFO_EN_A = 0x44, REG_SFLP_ODR = 0x5e,
     BANK_MAIN = 0x00, BANK_EMBEDDED = 0x80,
     SFLP_RATE_120HZ = 3,
@@ -36,6 +37,8 @@ struct imu660rc_device {
     bool bus_initialized;
     bool isr_added;
     bool gpio_configured;
+    int64_t last_invalid_log_us;
+    bool invalid_reported;
 };
 
 static void delay_ms(uint32_t ms)
@@ -102,31 +105,48 @@ static esp_err_t configure_sensor(imu660rc_handle_t dev)
         ESP_LOGE(TAG, "WHO_AM_I=0x%02x, expected 0x70; check power and SPI wiring", id);
         return ESP_ERR_NOT_FOUND;
     }
-    /* Preserve the upstream boot/reset and SFLP setup sequence. */
+    /* SW_POR and documented FIFO interface, following ST's sensor-fusion
+     * example. Keep the existing +/-8 g and +/-2000 dps raw-data units. */
     ESP_RETURN_ON_ERROR(write_reg(dev, REG_FUNC_CFG_ACCESS, 0x04), TAG, "reset");
     delay_ms(30);
     const uint8_t main_setup[][2] = {
         {REG_CTRL3, 0x44},               /* BDU + register auto-increment */
         {REG_CTRL8, 0x02},               /* +/-8 g */
         {REG_CTRL6, 0x04},               /* +/-2000 dps */
-        {REG_CTRL1, 0x15}, {REG_CTRL2, 0x18},
+        {REG_CTRL1, 0x06}, {REG_CTRL2, 0x06}, /* normal ODR family, 120 Hz */
         {REG_CTRL7, 0x01}, {REG_CTRL9, 0x08}, /* LPF1 / LPF2 */
         {REG_FIFO_CTRL1, 0x01}, {REG_FIFO_CTRL4, 0x06},
-        {REG_INT2_CTRL, 0x80}, {REG_CTRL4, 0x08}, /* SFLP INT2, pulsed */
-        {REG_CTRL1, 0x10 | (SFLP_RATE_120HZ + 3)},
-        {REG_CTRL2, 0x10 | (SFLP_RATE_120HZ + 3)},
-        {REG_FUNC_CFG_ACCESS, BANK_EMBEDDED},
-        {REG_EMB_FUNC_FIFO_EN_A, 0x02},
-        {REG_SFLP_ODR, 0x43 | (SFLP_RATE_120HZ << 3)},
-        {REG_EMB_FUNC_EN_A, 0x02},
-        {REG_PAGE_RW, 0x00},
-        {REG_FUNC_CFG_ACCESS, BANK_MAIN},
+        {REG_INT2_CTRL, 0x08}, {REG_CTRL4, 0x00}, /* level-high FIFO watermark INT2 */
     };
     for (size_t i = 0; i < sizeof(main_setup) / sizeof(main_setup[0]); ++i) {
         ESP_RETURN_ON_ERROR(write_reg(dev, main_setup[i][0], main_setup[i][1]),
                             TAG, "configure register 0x%02x", main_setup[i][0]);
     }
-    ESP_LOGI(TAG, "LSM6DSV16X ID=0x70, SPI mode 0 / %d Hz, SFLP 120 Hz",
+    ESP_RETURN_ON_ERROR(write_reg(dev, REG_FUNC_CFG_ACCESS, BANK_EMBEDDED), TAG, "embedded bank");
+    /* Preserve reserved bits rather than forcing the old magic constant. */
+    uint8_t odr = 0;
+    esp_err_t err = write_reg(dev, REG_EMB_FUNC_FIFO_EN_A, 0x02);
+    if (err == ESP_OK) err = read_regs(dev, REG_SFLP_ODR, &odr, 1);
+    if (err == ESP_OK) err = write_reg(dev, REG_SFLP_ODR,
+                                      (odr & ~0x38U) | (SFLP_RATE_120HZ << 3));
+    if (err == ESP_OK) err = write_reg(dev, REG_EMB_FUNC_EN_A, 0x02);
+    const esp_err_t bank_err = write_reg(dev, REG_FUNC_CFG_ACCESS, BANK_MAIN);
+    ESP_RETURN_ON_ERROR(err != ESP_OK ? err : bank_err, TAG, "SFLP FIFO configuration");
+    /* Read back critical main-bank registers before declaring initialization OK. */
+    const uint8_t verify[][2] = {
+        {REG_CTRL1, 0x06}, {REG_CTRL2, 0x06}, {REG_FIFO_CTRL1, 0x01},
+        {REG_FIFO_CTRL4, 0x06}, {REG_INT2_CTRL, 0x08},
+    };
+    for (size_t i = 0; i < sizeof(verify) / sizeof(verify[0]); ++i) {
+        uint8_t value;
+        ESP_RETURN_ON_ERROR(read_regs(dev, verify[i][0], &value, 1), TAG, "verify config");
+        if (value != verify[i][1]) {
+            ESP_LOGE(TAG, "Register 0x%02x readback=0x%02x expected=0x%02x",
+                     verify[i][0], value, verify[i][1]);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+    ESP_LOGI(TAG, "LSM6DSV16X ID=0x70, SPI mode 0 / %d Hz, SFLP FIFO 120 Hz, INT2 watermark=1",
              dev->config.clock_speed_hz);
     return ESP_OK;
 }
@@ -225,26 +245,9 @@ fail:
     return err;
 }
 
-static esp_err_t read_quaternion(imu660rc_handle_t dev, uint8_t data[8])
+static esp_err_t fifo_read_registers(void *context, uint8_t reg, uint8_t *data, size_t length)
 {
-    esp_err_t err = write_reg(dev, REG_FUNC_CFG_ACCESS, BANK_EMBEDDED);
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = write_reg(dev, REG_PAGE_RW, 0x20);
-    if (err == ESP_OK) {
-        err = write_reg(dev, REG_PAGE_SEL, 0x31);
-    }
-    for (int i = 0; i < 8 && err == ESP_OK; ++i) {
-        err = write_reg(dev, REG_PAGE_ADDRESS, 0x4c + i);
-        if (err == ESP_OK) {
-            err = read_regs(dev, REG_PAGE_VALUE, &data[i], 1);
-        }
-    }
-    /* Always try to leave page access and return to the main register bank. */
-    esp_err_t page_err = write_reg(dev, REG_PAGE_RW, 0x00);
-    esp_err_t bank_err = write_reg(dev, REG_FUNC_CFG_ACCESS, BANK_MAIN);
-    return err != ESP_OK ? err : (page_err != ESP_OK ? page_err : bank_err);
+    return read_regs(context, reg, data, length);
 }
 
 static int16_t read_i16_le(const uint8_t *data)
@@ -258,18 +261,42 @@ esp_err_t imu660rc_read(imu660rc_handle_t dev, imu660rc_sample_t *sample,
     if (dev == NULL || sample == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    TickType_t ticks = pdMS_TO_TICKS(timeout_ms);
-    if (timeout_ms > 0 && ticks == 0) {
-        ticks = 1;
-    }
-    if (xSemaphoreTake(dev->ready, ticks) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    uint8_t quaternion[8];
-    ESP_RETURN_ON_ERROR(read_quaternion(dev, quaternion), TAG, "read quaternion");
+    const int64_t deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    uint8_t packet[7] = {0}, status[2] = {0};
     float angles[3];
-    if (!imu660rc_decode_angles(quaternion, angles)) {
-        return ESP_ERR_INVALID_RESPONSE;
+    esp_err_t err;
+    while (1) {
+        /* FIFO IRQ is a level, not a sample counter. Peek before waiting:
+         * an edge may already have happened or FIFO may still be nonempty. */
+        (void)xSemaphoreTake(dev->ready, 0);
+        err = imu660rc_fifo_read(fifo_read_registers, dev, angles, packet, status);
+        if (err != ESP_ERR_NOT_FOUND) break;
+        const int64_t remaining_us = deadline_us - esp_timer_get_time();
+        if (remaining_us <= 0) return ESP_ERR_TIMEOUT;
+        const int64_t tick_us = (int64_t)portTICK_PERIOD_MS * 1000;
+        const TickType_t ticks = (TickType_t)((remaining_us + tick_us - 1) / tick_us);
+        if (xSemaphoreTake(dev->ready, ticks) != pdTRUE) return ESP_ERR_TIMEOUT;
+    }
+    if (err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_INVALID_STATE) {
+        const int64_t now_us = esp_timer_get_time();
+        if (dev->last_invalid_log_us == 0 || now_us - dev->last_invalid_log_us >= 1000000) {
+            uint8_t id = 0;
+            const esp_err_t id_err = read_regs(dev, REG_WHO_AM_I, &id, 1);
+            ESP_LOGW(TAG, "SFLP FIFO %s: packet=%02x %02x %02x %02x %02x %02x %02x, status=%02x %02x; "
+                     "WHO_AM_I=0x%02x (expected 0x70), id_read=%s, SPI=%d Hz",
+                     err == ESP_ERR_INVALID_RESPONSE ? "invalid quaternion" : "overrun",
+                     packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6],
+                     status[0], status[1],
+                     id, esp_err_to_name(id_err), dev->config.clock_speed_hz);
+            dev->last_invalid_log_us = now_us;
+            dev->invalid_reported = true;
+        }
+        return err;
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "read SFLP FIFO");
+    if (dev->invalid_reported) {
+        ESP_LOGI(TAG, "Valid quaternion samples resumed");
+        dev->invalid_reported = false;
     }
     uint8_t raw[12];
     ESP_RETURN_ON_ERROR(read_regs(dev, REG_OUTX_L_G, raw, sizeof(raw)), TAG, "read sensors");
@@ -280,6 +307,12 @@ esp_err_t imu660rc_read(imu660rc_handle_t dev, imu660rc_sample_t *sample,
         next.gyro_raw[i] = read_i16_le(&raw[i * 2]);
         next.acc_raw[i] = read_i16_le(&raw[6 + i * 2]);
     }
+    const float gyro_dps[3] = {
+        next.gyro_raw[0] / 14.2857f, next.gyro_raw[1] / 14.2857f,
+        next.gyro_raw[2] / 14.2857f,
+    };
+    next.tilt_valid = imu660rc_decode_balance(packet + 1, gyro_dps,
+                                             &next.tilt_deg, &next.tilt_rate_dps);
     *sample = next;
     return ESP_OK;
 }

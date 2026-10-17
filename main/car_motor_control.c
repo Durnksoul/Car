@@ -27,6 +27,8 @@
 #include "tb6612fng.h"
 
 static const char *TAG = "car_motor";
+/* Keep A as the forward reference; the user's mirrored B motor is reversed. */
+static const int motor_direction[2] = {1, -1};
 
 typedef struct {
     tb6612fng_handle_t motor;
@@ -39,6 +41,30 @@ typedef struct {
 static bool reply_to_ble;
 #endif
 static car_encoder_sample_t encoder;
+static int64_t encoder_us;
+static portMUX_TYPE snapshot_lock = portMUX_INITIALIZER_UNLOCKED;
+static car_motor_snapshot_t snapshot;
+
+static void publish_snapshot(const control_t *control)
+{
+    car_motor_snapshot_t next = {
+        .encoder = encoder, .encoder_us = encoder_us, .enabled = control->enabled,
+        .command_percent = {control->percent[0], control->percent[1]},
+        .braking = {control->mode[0] == TB_CMD_BRAKE, control->mode[1] == TB_CMD_BRAKE},
+    };
+    portENTER_CRITICAL(&snapshot_lock);
+    snapshot = next;
+    portEXIT_CRITICAL(&snapshot_lock);
+}
+
+bool car_motor_control_snapshot(car_motor_snapshot_t *out)
+{
+    if (!out) return false;
+    portENTER_CRITICAL(&snapshot_lock);
+    *out = snapshot;
+    portEXIT_CRITICAL(&snapshot_lock);
+    return out->encoder_us > 0;
+}
 
 static void reply(const char *format, ...)
 {
@@ -57,8 +83,9 @@ static void reply(const char *format, ...)
 
 static void print_encoder(void)
 {
-    reply("enc_left=%" PRId64 ",enc_right=%" PRId64 ",cps_left=%.1f,cps_right=%.1f",
-          encoder.count[0], encoder.count[1], (double)encoder.cps[0], (double)encoder.cps[1]);
+    reply("enc_left=%" PRId64 ",enc_right=%" PRId64 ",cps_left=%.1f,cps_right=%.1f,enc_us=%" PRId64,
+          encoder.count[0], encoder.count[1], (double)encoder.cps[0],
+          (double)encoder.cps[1], encoder_us);
 }
 
 static void print_help(void)
@@ -67,8 +94,9 @@ static void print_help(void)
     reply("help | status | enc | enczero | enable | standby");
     reply("a <percent> | b <percent> | ab <A-percent> <B-percent> (-100..100)");
     reply("coast a|b|all | brake a|b|all");
-    reply("Boot: STANDBY; send enable, then ab 50 50 to start both motors");
+    reply("Boot: STANDBY; send enable, then ab 20 20 to start both motors");
     reply("PWM=20kHz, 0=coast, +/-100=HIGH; holds until next command");
+    reply("Logical forward: A normal, B reversed; encoder signs still require confirmation");
 }
 
 static void print_status(const control_t *control)
@@ -84,8 +112,9 @@ static void print_status(const control_t *control)
             reply("%c: COAST, IN=00, PWM=HIGH", 'A' + i);
         } else {
             int p = control->percent[i];
+            int physical = p * motor_direction[i];
             reply("%c: %+d%%, IN=%s, PWM=%s", 'A' + i, p,
-                     p > 0 ? "10" : "01", (p == 100 || p == -100) ? "HIGH" : "20kHz");
+                     physical > 0 ? "10" : "01", (p == 100 || p == -100) ? "HIGH" : "20kHz");
         }
     }
 }
@@ -108,6 +137,7 @@ static esp_err_t apply_command(control_t *control, const tb6612_command_t *comma
         err = car_encoder_zero();
         if (err != ESP_OK) return err;
         encoder = (car_encoder_sample_t){0};
+        encoder_us = esp_timer_get_time();
         print_encoder();
         return ESP_OK;
     }
@@ -122,14 +152,15 @@ static esp_err_t apply_command(control_t *control, const tb6612_command_t *comma
         if (!control->enabled) return ESP_ERR_INVALID_STATE;
         if (command->kind == TB_CMD_SPEED && command->motor_mask == 3) {
             err = tb6612fng_set_speeds(control->motor,
-                                     command->a_percent * 10, command->b_percent * 10);
+                                     command->a_percent * 10 * motor_direction[0],
+                                     command->b_percent * 10 * motor_direction[1]);
         } else {
             for (int i = 0; i < 2 && err == ESP_OK; ++i) {
                 if (!(command->motor_mask & (1U << i))) continue;
                 tb6612fng_motor_t motor = (tb6612fng_motor_t)i;
                 if (command->kind == TB_CMD_SPEED) {
                     int p = i == 0 ? command->a_percent : command->b_percent;
-                    err = tb6612fng_set_speed(control->motor, motor, p * 10);
+                    err = tb6612fng_set_speed(control->motor, motor, p * 10 * motor_direction[i]);
                 } else if (command->kind == TB_CMD_COAST) {
                     err = tb6612fng_coast(control->motor, motor);
                 } else {
@@ -162,6 +193,7 @@ static void receive_line(const char *line, void *argument)
     esp_err_t err = tb6612_command_parse(line, &command);
     if (err != ESP_OK) { reply("ERR: invalid command; send help"); return; }
     err = apply_command(control, &command);
+    publish_snapshot(control);
     if (err == ESP_ERR_INVALID_STATE) reply("ERR: in standby; send enable first");
     else if (err != ESP_OK) reply("ERR: %s", esp_err_to_name(err));
     else reply("OK: %s", line);
@@ -191,12 +223,15 @@ static void motor_task(void *argument)
     usb_fd = open("/dev/secondary", O_RDONLY | O_NONBLOCK);
     if (usb_fd < 0) ESP_LOGW(TAG, "USB command input unavailable; use UART console");
 #endif
-    /* Hold standby until explicit serial enable and speed commands arrive. */
-    esp_err_t err = tb6612fng_enable(control.motor, false);
+    /* Every power-on/reset waits for explicit enable and speed commands. */
+    const tb6612_command_t boot_standby = {.kind = TB_CMD_STANDBY};
+    esp_err_t err = apply_command(&control, &boot_standby);
     if (err != ESP_OK) goto stopped;
     reply("Motor control ready: STANDBY, STBY=0; waiting for serial commands");
+    publish_snapshot(&control);
     print_help();
     int64_t last_sample_us = esp_timer_get_time();
+    int64_t last_report_us = last_sample_us;
     while (1) {
 #if CONFIG_CAR_BLE_UART
         reply_to_ble = false;
@@ -222,16 +257,25 @@ static void motor_task(void *argument)
         }
 #endif
         int64_t now = esp_timer_get_time();
-        if (now - last_sample_us >= 200000) {
+        if (now - last_sample_us >= 20000) {
             err = car_encoder_sample(&encoder);
             if (err != ESP_OK) break;
-            print_encoder();
+            encoder_us = esp_timer_get_time();
+            publish_snapshot(&control);
             last_sample_us = now;
+        }
+        if (now - last_report_us >= 200000) {
+            print_encoder();
+            last_report_us = now;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 stopped:
     (void)tb6612fng_enable(control.motor, false);
+    control.enabled = false;
+    clear_commands(&control);
+    encoder_us = 0;
+    publish_snapshot(&control);
     ESP_LOGE(TAG, "Control failed: %s; both motors commanded to standby", esp_err_to_name(err));
     if (usb_fd >= 0) close(usb_fd);
     car_encoder_deinit();

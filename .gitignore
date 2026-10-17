@@ -15,6 +15,7 @@
 
 # Log files
 *.log
+log.Car.*.txt
 
 # Build artifacts and directories
 **/build/

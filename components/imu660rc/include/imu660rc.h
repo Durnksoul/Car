@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
@@ -38,15 +39,19 @@ typedef struct {
     float yaw_deg;                 /* 0 .. 360, relative heading; may drift */
     int16_t acc_raw[3];            /* X/Y/Z, +/-8 g; divide by 4098.36 for g */
     int16_t gyro_raw[3];           /* X/Y/Z, +/-2000 dps; divide by 14.2857 */
+    float tilt_deg;                /* projected +Y wheel-axis tilt, [-180,180) */
+    float tilt_rate_dps;           /* matching projected rate; ~gyro Y near upright */
+    bool tilt_valid;               /* defined projection, not balance enablement */
 } imu660rc_sample_t;
 
-/* Owns a dedicated SPI bus. Enables hardware SFLP at 120 Hz, like the
- * upstream demo. INT2 must be wired. Does not install a UART driver. */
+/* Owns a dedicated SPI bus. Enables hardware SFLP FIFO at 120 Hz.
+ * INT2 FIFO watermark (one record) must be wired. Does not install UART. */
 esp_err_t imu660rc_init(const imu660rc_config_t *config, imu660rc_handle_t *out);
 
-/* Call from one task only, never an ISR. Waits for INT2, then reads the latest
- * quaternion and raw sensors. On error, sample is unchanged. Older interrupts
- * may coalesce; this interface is for current attitude, not FIFO recording. */
+/* Call from one task only, never an ISR. Drains the current FIFO snapshot,
+ * selects the newest SFLP record, and reads current raw sensors. Waits on INT2
+ * if empty. On error sample is unchanged. Raw sensors and FIFO attitude are
+ * not timestamp-synchronized. This interface is not a lossless FIFO recorder. */
 esp_err_t imu660rc_read(imu660rc_handle_t dev, imu660rc_sample_t *sample,
                        uint32_t timeout_ms);
 
