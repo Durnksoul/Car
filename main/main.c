@@ -18,6 +18,10 @@ void app_main(void)
 {
     /* Runtime application logs only; ROM/bootloader output occurs earlier. */
     if (CAR_ENCODER_ONLY_LOG) esp_log_level_set("*", ESP_LOG_NONE);
+#if CONFIG_CAR_PID_TUNER
+    /* Keep ESP-IDF logs out of the tuner's serial stream. */
+    esp_log_level_set("*", ESP_LOG_WARN);
+#endif
 #if CONFIG_CAR_MOTOR_CONTROL
     esp_err_t motor_err = car_motor_control_start();
     if (motor_err != ESP_OK) {
@@ -44,9 +48,11 @@ void app_main(void)
     int64_t settle_until_us = esp_timer_get_time() + YAW_SETTLE_US;
     float yaw_zero_deg = 0.0f;
     bool yaw_zeroed = false;
+    #if !CONFIG_CAR_PID_TUNER
     int64_t last_print_us = 0;
+#endif
     int64_t last_warning_us = 0;
-#if CONFIG_CAR_MOTOR_CONTROL
+#if CONFIG_CAR_MOTOR_CONTROL && !CONFIG_CAR_PID_TUNER
     int64_t last_telemetry_us = 0;
 #endif
     while (1) {
@@ -101,16 +107,22 @@ void app_main(void)
         car_motor_control_imu(now_us, sample.tilt_deg, sample.tilt_rate_dps,
                               (float)sample.gyro_raw[2] / 14.2857f, sample.tilt_valid);
 #endif
-        if (!CAR_ENCODER_ONLY_LOG && now_us - last_print_us >= 50000) {
+#if !CONFIG_CAR_PID_TUNER
+        bool fast_telemetry = true;
+#if CONFIG_CAR_MOTOR_CONTROL
+        fast_telemetry = car_motor_control_telemetry_fast();
+#endif
+        if (fast_telemetry && !CAR_ENCODER_ONLY_LOG && now_us - last_print_us >= 50000) {
             printf("roll=%.2f,pitch=%.2f,yaw=%.2f\r\n",
                    (double)sample.roll_deg, (double)sample.pitch_deg,
                    (double)yaw_relative_deg);
             last_print_us = now_us;
         }
+#endif
         /* Separate line preserves the existing viewer's strict roll/pitch/yaw
          * parser. PID uses the independent projected tilt, not these Euler angles. */
-#if CONFIG_CAR_MOTOR_CONTROL
-        if (!CAR_ENCODER_ONLY_LOG && now_us - last_telemetry_us >= 200000) {
+#if CONFIG_CAR_MOTOR_CONTROL && !CONFIG_CAR_PID_TUNER
+        if (fast_telemetry && !CAR_ENCODER_ONLY_LOG && now_us - last_telemetry_us >= 200000) {
             car_motor_snapshot_t motor;
             const bool encoder_valid = car_motor_control_snapshot(&motor);
             printf("telemetry,t_us=%" PRId64 ",roll=%.2f,pitch=%.2f,yaw=%.2f,"

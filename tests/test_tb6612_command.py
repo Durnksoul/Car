@@ -78,7 +78,7 @@ for text in invalid:
 assert parse(b"help", None) == 0x102
 
 class Stream(ctypes.Structure):
-    _fields_ = [("line", ctypes.c_char * 64), ("used", ctypes.c_size_t), ("discard", ctypes.c_bool)]
+    _fields_ = [("line", ctypes.c_char * 128), ("used", ctypes.c_size_t), ("discard", ctypes.c_bool)]
 
 lines = []
 callback_type = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_void_p)
@@ -100,7 +100,7 @@ lines.clear(); stream = Stream()
 send(b"a 5"); assert not lines
 send(b"1\b0\n"); assert lines == [b"a 50"]
 lines.clear(); stream = Stream()
-send(b"a " + b"0" * 62 + b"\b\nenc\n")
+send(b"a " + b"0" * 126 + b"\b\nenc\n")
 assert lines == [None, b"enc"]
 lines.clear(); stream = Stream()
 send(b"ab 50\x00 50\nenc\n")

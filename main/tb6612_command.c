@@ -23,7 +23,7 @@ static bool equal(token_t token, const char *word)
 
 static bool percent(token_t token, int *out)
 {
-    size_t i = 0;
+    size_t i = 0, digits = 0;
     int sign = 1, value = 0;
     if (!token.length) return false;
     if (token.text[0] == '-' || token.text[0] == '+') {
@@ -34,6 +34,8 @@ static bool percent(token_t token, int *out)
     for (; i < token.length; ++i) {
         char c = token.text[i];
         if (c < '0' || c > '9') return false;
+        /* Cap the digit count so long zero-padded strings are not accepted. */
+        if (++digits > 3) return false;
         value = value * 10 + c - '0';
         if (value > 100) return false;
     }

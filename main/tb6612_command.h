@@ -2,7 +2,9 @@
 
 #include "esp_err.h"
 
-#define TB6612_COMMAND_LINE_SIZE 64
+/* Long enough for a host "SET P:<float> I:<float> D:<float>" line with
+ * full-precision floats (three ~24-character values plus fixed text). */
+#define TB6612_COMMAND_LINE_SIZE 128
 
 typedef enum {
     TB_CMD_HELP, TB_CMD_STATUS, TB_CMD_ENABLE, TB_CMD_STANDBY,

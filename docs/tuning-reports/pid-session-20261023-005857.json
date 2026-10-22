@@ -1,0 +1,874 @@
+{
+  "sample_count": 2177,
+  "rounds": [
+    {
+      "type": "round_metrics",
+      "seq": 105,
+      "round": 1,
+      "avg_error": 1.05665,
+      "max_error": 1.385,
+      "steady_state_error": 1.2104,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "SLOW_RESPONSE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.08
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.0679987125460404,
+        "peak_error_deg": 1.385,
+        "peak_to_peak_deg": 0.532,
+        "estimated_rate_rms_dps": 0.7086768302966349,
+        "duration_s": 5.006000000000313,
+        "pwm_step_rms_pct": 0.17715986046962265,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.045,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 591,
+      "round": 2,
+      "avg_error": 0.6763800000000001,
+      "max_error": 0.916,
+      "steady_state_error": 0.81035,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "STABLE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.06
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 0.6859365130972399,
+        "peak_error_deg": 0.916,
+        "peak_to_peak_deg": 0.47800000000000004,
+        "estimated_rate_rms_dps": 0.50497886874666,
+        "duration_s": 5.007999999999811,
+        "pwm_step_rms_pct": 0.1313760121394182,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 1252,
+      "round": 3,
+      "avg_error": 1.13384,
+      "max_error": 1.193,
+      "steady_state_error": 1.18295,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "SLOW_RESPONSE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.04
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.1343865566904432,
+        "peak_error_deg": 1.193,
+        "peak_to_peak_deg": 0.119,
+        "estimated_rate_rms_dps": 0.10142729546046877,
+        "duration_s": 5.016000000000076,
+        "pwm_step_rms_pct": 0.0280268630157756,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 2018,
+      "round": 4,
+      "avg_error": 0.7426,
+      "max_error": 0.765,
+      "steady_state_error": 0.7327,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "STABLE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.046
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 0.7426748817618649,
+        "peak_error_deg": 0.765,
+        "peak_to_peak_deg": 0.04800000000000004,
+        "estimated_rate_rms_dps": 0.11948272748988745,
+        "duration_s": 5.016000000000076,
+        "pwm_step_rms_pct": 0.030806335436567328,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 2908,
+      "round": 5,
+      "avg_error": 0.7164999999999999,
+      "max_error": 0.729,
+      "steady_state_error": 0.7162,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "STABLE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.0529
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 0.7165167688198232,
+        "peak_error_deg": 0.729,
+        "peak_to_peak_deg": 0.02200000000000002,
+        "estimated_rate_rms_dps": 0.06507798662249845,
+        "duration_s": 5.013999999999669,
+        "pwm_step_rms_pct": 0.017370298579105443,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 3900,
+      "round": 6,
+      "avg_error": 0.6865300000000001,
+      "max_error": 0.726,
+      "steady_state_error": 0.6876,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "STABLE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.057
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 0.6866452868839923,
+        "peak_error_deg": 0.726,
+        "peak_to_peak_deg": 0.07699999999999996,
+        "estimated_rate_rms_dps": 0.20704431418569907,
+        "duration_s": 5.005999999999858,
+        "pwm_step_rms_pct": 0.05329335622928825,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 4724,
+      "round": 7,
+      "avg_error": 0.63359,
+      "max_error": 0.724,
+      "steady_state_error": 0.611,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "STABLE",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.053
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 0.6341914458584252,
+        "peak_error_deg": 0.724,
+        "peak_to_peak_deg": 0.128,
+        "estimated_rate_rms_dps": 0.2297295278537977,
+        "duration_s": 5.0099999999997635,
+        "pwm_step_rms_pct": 0.058458566869228325,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": 0.0,
+        "effective_setpoint_max_deg": 0.0,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 6437,
+      "round": 8,
+      "avg_error": 1.1767875,
+      "max_error": 3.175,
+      "steady_state_error": 1.1541875,
+      "overshoot": 0.0,
+      "zero_crossings": 11,
+      "status": "OSCILLATING",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.052
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.4076458760995252,
+        "peak_error_deg": 3.175,
+        "peak_to_peak_deg": 5.727,
+        "estimated_rate_rms_dps": 14.639745599460042,
+        "duration_s": 10.022,
+        "pwm_step_rms_pct": 3.9844923584354355,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.637,
+        "effective_setpoint_max_deg": 0.364,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": true,
+        "recovery_passed": false,
+        "recovery_peak_error_deg": 4.466,
+        "settling_time_s": null,
+        "decay_ratio": 0.7109270040304523,
+        "late_peak_error_deg": 3.175,
+        "disturbance_excursion_deg": 5.0094,
+        "disturbance_source": "manual_push_unmeasured_force"
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 7169,
+      "round": 9,
+      "avg_error": 1.13771,
+      "max_error": 3.041,
+      "steady_state_error": 0.8746,
+      "overshoot": 0.0,
+      "zero_crossings": 13,
+      "status": "OSCILLATING",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.059
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.355328952690084,
+        "peak_error_deg": 3.041,
+        "peak_to_peak_deg": 5.859,
+        "estimated_rate_rms_dps": 14.018081459315258,
+        "duration_s": 5.005999999999858,
+        "pwm_step_rms_pct": 3.831452317148924,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.325,
+        "effective_setpoint_max_deg": 0.364,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 8749,
+      "round": 10,
+      "avg_error": 1.1042,
+      "max_error": 1.36,
+      "steady_state_error": 1.1311875,
+      "overshoot": 0.0,
+      "zero_crossings": 0,
+      "status": "OSCILLATING",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.053
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.1061079852347147,
+        "peak_error_deg": 1.36,
+        "peak_to_peak_deg": 0.40500000000000014,
+        "estimated_rate_rms_dps": 0.7284767762941993,
+        "duration_s": 10.016,
+        "pwm_step_rms_pct": 0.17911802204910818,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.501,
+        "effective_setpoint_max_deg": 0.433,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": true,
+        "recovery_passed": false,
+        "recovery_peak_error_deg": 3.863,
+        "settling_time_s": null,
+        "decay_ratio": 0.35205798602122707,
+        "late_peak_error_deg": 1.36,
+        "disturbance_excursion_deg": 4.1966,
+        "disturbance_source": "manual_push_unmeasured_force"
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 9935,
+      "round": 11,
+      "avg_error": 0.85623,
+      "max_error": 5.059,
+      "steady_state_error": 1.28725,
+      "overshoot": 0.0,
+      "zero_crossings": 4,
+      "status": "OSCILLATING",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.058
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.328358208466376,
+        "peak_error_deg": 5.059,
+        "peak_to_peak_deg": 8.575,
+        "estimated_rate_rms_dps": 12.426749829070994,
+        "duration_s": 5.0099999999997635,
+        "pwm_step_rms_pct": 3.0386465969925065,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.45,
+        "effective_setpoint_max_deg": 0.501,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    },
+    {
+      "type": "round_metrics",
+      "seq": 11259,
+      "round": 12,
+      "avg_error": 1.26348,
+      "max_error": 2.931,
+      "steady_state_error": 1.2304,
+      "overshoot": 0.0,
+      "zero_crossings": 14,
+      "status": "OSCILLATING",
+      "stable_rounds": 0,
+      "pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.066
+      },
+      "balance_metrics": {
+        "metric_profile": "balance_car_v1",
+        "overshoot_applicable": false,
+        "rms_error_deg": 1.4729944534858235,
+        "peak_error_deg": 2.931,
+        "peak_to_peak_deg": 5.63,
+        "estimated_rate_rms_dps": 15.833491508664407,
+        "duration_s": 5.003000000000156,
+        "pwm_step_rms_pct": 4.212373464214706,
+        "setpoint": 0.0,
+        "nominal_setpoint_deg": 0.0,
+        "effective_setpoint_min_deg": -0.318,
+        "effective_setpoint_max_deg": 0.35,
+        "effective_setpoint_source": "inner_target_including_speed_feedback",
+        "recovery_required": true,
+        "recovery_tested": false,
+        "recovery_passed": false
+      }
+    }
+  ],
+  "result": {
+    "elapsed_sec": 329.08322310447693,
+    "provider": "openai",
+    "model": "deepseek-flash",
+    "rounds_completed": 12,
+    "final_pid": {
+      "p": 4.85,
+      "i": 0.1,
+      "d": 0.053
+    },
+    "final_metrics": {
+      "metric_profile": "balance_car_v1",
+      "avg_error": 1.1042,
+      "max_error": 1.36,
+      "steady_state_error": 1.1311875,
+      "overshoot": 0.0,
+      "overshoot_applicable": false,
+      "zero_crossings": 0,
+      "rms_error_deg": 1.1061079852347147,
+      "peak_error_deg": 1.36,
+      "peak_to_peak_deg": 0.40500000000000014,
+      "estimated_rate_rms_dps": 0.7284767762941993,
+      "duration_s": 10.016,
+      "pwm_step_rms_pct": 0.17911802204910818,
+      "setpoint": 0.0,
+      "nominal_setpoint_deg": 0.0,
+      "effective_setpoint_min_deg": -0.501,
+      "effective_setpoint_max_deg": 0.433,
+      "effective_setpoint_source": "inner_target_including_speed_feedback",
+      "status": "OSCILLATING",
+      "recovery_required": true,
+      "recovery_tested": true,
+      "recovery_passed": false,
+      "recovery_peak_error_deg": 3.863,
+      "settling_time_s": null,
+      "decay_ratio": 0.35205798602122707,
+      "late_peak_error_deg": 1.36,
+      "disturbance_excursion_deg": 4.1966,
+      "disturbance_source": "manual_push_unmeasured_force",
+      "measured_round": 10,
+      "source": "best_observed_trial"
+    },
+    "metric_profile": "balance_car_v1",
+    "converged": false,
+    "recovery_verified": false,
+    "stopped": false,
+    "fallback_count": 0,
+    "guardrail_count": 1,
+    "rollback_count": 0,
+    "completed_reason": "max_rounds_reached",
+    "secondary_pid": null,
+    "strategy": "ai"
+  },
+  "decisions": [
+    {
+      "type": "decision",
+      "seq": 487,
+      "round": 1,
+      "action": "保持 P=5.0、I=0.1，将 D 由 0.08 下调至 0.06；下一轮重点比较 rms_error_deg、steady_state_error、peak_to_peak_deg 与 estimated_rate_rms_dps。若峰峰值或速率明显变差，则回调 D。",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.06
+      },
+      "analysis_summary": "初始轮数据表现为慢响应和约 1.2° 的持续偏置，峰峰值不大且无过零振荡。P 已到运行时上限 5.0，不能继续提升；I 被固定为 0.1；因此只能围绕 D 做保守有界调整。选择将 D 从 0.08 小幅降至 0.06，优先改善响应速度与稳态偏置，同时保留阻尼。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 1148,
+      "round": 2,
+      "action": "保持 P=5.0、I=0.1 不变，将 D 由 0.06 下调至 0.04，继续在无振荡前提下减小阻尼拖滞、改善慢偏置；若下调后出现峰峰值增大或过零振荡则回退。",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.04
+      },
+      "analysis_summary": "本轮相较上轮下调 D 后 RMS 由 1.068°降至 0.686°、MaxErr 由 1.39°降至 0.916°，峰峰值 0.478°、过零数 0、无振荡，状态转为 STABLE，验证减小 D 减小相位滞后有效。现存问题为约 0.81° 的持续角度偏置与样本内缓慢单调漂移，而非高频振荡。P 已达上限 5.0、I 固定 0.1，唯一可调量为 D。基于仍有阻尼余量（峰峰值小、无过零），将 D 由 0.06 小幅降至 0.04 以进一步改善响应并观察偏置是否减小；P/I 维持不变。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 1914,
+      "round": 3,
+      "action": "将 D 由 0.04 上调至 0.046（受单轮 1.15x 上限约束，朝已验证更优的 D≈0.06 方向回退），P=5.0、I=0.1 维持边界值不变",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.046
+      },
+      "analysis_summary": "本轮 D 从 0.06 降至 0.04 后，AvgErr 由 0.68° 恶化到 1.134°，MaxErr 由 0.92° 升到 1.193°，状态由 STABLE 退回 SLOW_RESPONSE；但峰峰值仅 0.119°、估算速率 0.101°/s、过零数 0，误差在样本内单调漂移，属阻尼不足造成的缓慢偏置而非振荡。结合 Round1（D=0.08 时 AvgErr=1.06、MaxErr=1.39）可知 D 最优区间在 0.06 附近，D 过小或过大都变差。P 已达上限 5.0、I 固定 0.1，唯一可调量为 D，故将 D 由 0.04 小幅上调至 0.046（受单轮 1.15x 增长上限约束），朝已验证更优的 D≈0.06 方向回退，P、I 保持不变。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 2804,
+      "round": 4,
+      "action": "将 D 从 0.046 有界上调至 0.053（朝历史平均误差更优的 D≈0.06 方向靠近），P=5.0、I=0.1 保持不动；下轮重点观察 AvgErr 是否继续下降，若峰峰值或估算速率回升则回退至 0.046。当前残余约 0.73° 静态偏置受 P 上限与固定 I 制约，属结构性偏置，需由主机判定是否已达到可接受收敛。",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.052899999999999996
+      },
+      "analysis_summary": "本轮 D=0.046 相比 Round3（D=0.04）AvgErr 由 1.134° 降至 0.743°、MaxErr 由 1.193° 降至 0.765°，状态回到 STABLE，且峰峰值 0.048°、估算速率 RMS 0.119°/s 均为四轮最优，证明 D 回升方向正确、系统已基本无摇摆。剩余问题为约 0.73° 的稳定静态偏置（误差全程约 -0.74°、PWM 恒约 -3.9%、无过零、无漂移趋势），属积分才能消除的偏置，但 I 固定 0.1、P 已到上限 5.0，可控量只剩 D。历史显示 D=0.06 时平均误差最小（0.686°）而 D=0.04 最差，故将 D 由 0.046 有界上调至 0.053（受 1.15x 单轮上限约束），朝已验证更优区间靠近；P、I 保持不变。",
+      "fallback_used": false,
+      "guardrail_notes": [
+        "D 增幅过大，已从 0.0530 限制到 0.0529"
+      ]
+    },
+    {
+      "type": "decision",
+      "seq": 3796,
+      "round": 5,
+      "action": "保持 P=5.0、I=0.1 不变（P 已到运行时上限、I 固定），将 D 由 0.0529 小幅上调至 0.057（≈1.077x，远低于 1.15x 单轮上限），继续朝历史验证的更优 D 区间逼近，观察最大误差与峰峰值是否进一步改善且不引入摇摆。",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.057
+      },
+      "analysis_summary": "本轮 P=5.0/I=0.1/D=0.0529 表现：AvgErr=0.717°、MaxErr=0.729°、峰峰仅 0.022°、估算速率 RMS 0.065°/s、PWM 步进 0.017%、过零数 0，状态 STABLE。与 D=0.046 轮相比，最大误差、峰峰值、估算速率三项同步下降，说明 D 上调方向正确且系统已几乎无摇摆，是五轮中动态品质最优的一次。历史显示 D=0.04 明显过小（AvgErr 1.134°），D=0.08 过大（MaxErr 1.39°），D=0.06 时 AvgErr 略低但最大误差与峰峰明显偏大，故最优点位于 0.0529~0.06 之间。当前唯一残留问题为约 0.72° 的恒定角度偏置（无漂移趋势、无振荡），该偏置需积分消除，而 I 固定 0.1、P 已达上限 5.0，可控量只剩 D。基于保守硬件安全风格，在单轮 1.15x 上限内将 D 由 0.0529 小幅上调至 0.057（约 1.077x），继续朝已验证的改善方向微调，避免直接跳到曾出现较大峰峰的 D=0.06 区间；P、I 维持不变。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 4620,
+      "round": 6,
+      "action": "reduce_d",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.053
+      },
+      "analysis_summary": "本轮 D=0.057 相比上轮 D=0.0529：RMS 0.717→0.687、MaxErr 0.729→0.726 仅微降，但峰峰 0.022→0.077、估算速率 0.065→0.207、PWM 步进 0.017→0.053 全面恶化，表明 D 略偏高、引入轻度抖动摇摆。D=0.0529 是历轮峰峰/速率/PWM 步进同步最小的最佳点，D=0.06 与 D=0.04 均更差，最优区间在 0.053 附近。P 已到上限 5.0、I 固定 0.1，唯一可控量为 D；残留约 0.69° 恒定偏置属积分才能消除的静态偏差，非 D 可解。为同时最小化 RMS 角度、峰峰摇摆与估算速率，将 D 由 0.057 回退至 0.053，P、I 保持不变。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 5633,
+      "round": 7,
+      "action": "P 保持 5.0、I 保持 0.1 不变，D 由 0.053 小幅下调至 0.052，朝历史中峰峰/速率/PWM 步进同步最小（D≈0.0529）的最优区间微调，观察摇摆指标是否改善且 RMS 不退化。",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.052
+      },
+      "analysis_summary": "本轮 P=5.0/I=0.1/D=0.053 指标：AvgErr=0.634°、RMS=0.634°、MaxErr=0.724°、稳态误差 0.611°、峰峰 0.128°、估算速率 RMS 0.230°/s、PWM 步进 0.058%、过零数 0、状态 STABLE。角度平均误差为历轮最低，但峰峰/速率偏高。注意到 D=0.053 与上轮 D=0.0529 数值几乎相同却峰峰相差 6 倍，判定摇摆指标存在明显逐次测量噪声，本轮高峰峰不代表 D 真实劣化。样本显示 input 后段向 -0.60° 缓慢收敛、PWM 稳定约 -3.3%、无振荡与等幅摆动。历史确证 D 最优区间在 0.052~0.053 附近（D=0.04 最差、D=0.06/0.08 偏大）。残留约 0.6° 恒定偏置属积分项才能消除，但 I 固定 0.1、P 已到上限 5.0，唯一可调量为 D。为在保持低 RMS 的同时尽量压低峰峰与估算速率，将 D 由 0.053 微调回 0.052（有界、可回退），P、I 维持不变。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 7065,
+      "round": 8,
+      "action": "increase_d_for_disturbance_damping",
+      "proposed_pid": {
+        "p": 5.0,
+        "i": 0.1,
+        "d": 0.059
+      },
+      "analysis_summary": "本轮 D=0.052 在推扰恢复测试中失败：AvgErr=1.177°、MaxErr=3.175°、峰峰 5.727°、估算速率 RMS 14.64°/s、过零 11 次，状态 OSCILLATING；recovery_passed=false、settling_time_s=null、decay_ratio=0.711，说明手动推扰后衰减不足、持续摇摆。对照历史，D=0.053 在无强推扰时 AvgErr 仅 0.634°，但 D=0.04 偏置最差、D=0.08 过大；本轮关键矛盾是推扰后阻尼不足，而非静态偏置。P 已到上限 5.0、I 固定 0.1，只能通过 D 提升阻尼。受单轮最大 1.15x 增长约束，将 D 由 0.052 上调至 0.059（约 1.135x），保持 P、I 不变，观察推扰后振荡衰减是否改善。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 8364,
+      "round": 9,
+      "action": "P 5.0→4.85（降低回路增益以抑制约 1.1 Hz 持续摆动）；D 0.059→0.053（回到历轮综合摇摆与平均误差最优的工作点）；I 固定 0.1 不变。若本轮仍摆动，下一轮回到 P=5.0/D=0.053 并停止增益试探。",
+      "proposed_pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.053
+      },
+      "analysis_summary": "本轮 P=5.0/I=0.1/D=0.059 出现约 1.1 Hz、峰峰 5.86°、过零 13 次的持续低频摆动（AvgErr=1.138°、MaxErr=3.041°、估算速率 14.02°/s），状态 OSCILLATING。样本序列 3.041→0.940→-0.071→-2.818 的周期约 0.9~1.0 s，属于阻尼不足的极限环，不是采样级高频噪声，说明问题在回路增益贴边，而非 D 过小。历史显示 D=0.046/0.0529/0.053/0.057 均稳定（峰峰最小 0.022°、AvgErr 最低 0.634°），而最近两轮 D=0.052 与 D=0.059 均摆动，且 D 分处两侧、效果不单调，说明仅靠 D 微调无法可靠消除摆动。P 顶在 5.0 无上调余量，D 在 1.1 Hz 处贡献仅约 8%，继续加 D 收益低且会放大噪声。故本轮采用能明确区分的候选：P 由 5.0 下调至 4.85 以降低回路增益、恢复相位裕度，D 回到实测最优的 0.053，I 固定 0.1 不变；预计静态偏置略增（约 0.9~1.0°），但优先压住 6° 级摆动，满足超调 0（该指标对平衡车不适用）前提下的稳定优先原则。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 9831,
+      "round": 10,
+      "action": "P 维持 4.85，I 固定 0.1，D 由 0.053 小幅上调至 0.058（约 1.094x），以增加推扰后阻尼、加快衰减整定；观察峰峰、估算速率、late_peak_error 与 settling_time 的变化。",
+      "proposed_pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.058
+      },
+      "analysis_summary": "本轮 P=4.85/I=0.1/D=0.053：AvgErr=1.104°、MaxErr=1.36°、峰峰 0.405°、估算速率 RMS 0.728°/s、PWM 步进 0.179%、过零数 0，状态 OSCILLATING（推扰恢复失败，decay_ratio=0.352、settling_time=null、late_peak_error=1.36°、disturbance_excursion=4.197°）。对比上轮 P=5.0/D=0.059（MaxErr 3.041°、峰峰 5.859°、速率 14.02°/s、过零 13），将 P 由 5.0 降到 4.85 使峰峰缩小约 14 倍、估算速率缩小约 19 倍、MaxErr 由 3.04° 降至 1.36°，证明高 P 逼近稳定边界是此前 1.1Hz 极限环的主因，降 P 方向有效。当前快速摆动已基本消除，残留问题为约 1.1° 的缓慢漂移偏置以及推扰后恢复迟缓（阻尼不足），而非噪声型抖动。P 已达 5.0 上限、继续提升会重回振荡边界，继续下调又会放大静态偏置，I 固定 0.1；唯一可控且能改善推扰后衰减的是 D。故在保持 P=4.85、I=0.1 的前提下，将 D 由 0.053 小幅上调至 0.058（约 1.094x，处于 1.15x 单轮上限内），以增加阻尼、加快推扰后振荡衰减与整定，观察 settling_time 与 late_peak_error 是否改善。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    },
+    {
+      "type": "decision",
+      "seq": 11155,
+      "round": 11,
+      "action": "保持 P=4.85、I=0.1 不变，将 D 由 0.058 小幅上调至 0.066（约 1.138x，位于单轮 1.15x 上限内），以提升推扰后约 1 Hz 摆动的阻尼与衰减速度；若下轮推扰后仍未收敛或出现高频抖动，则改为回调 D 并小幅下调 P 以换取相位裕度。",
+      "proposed_pid": {
+        "p": 4.85,
+        "i": 0.1,
+        "d": 0.066
+      },
+      "analysis_summary": "本轮 P=4.85/I=0.1/D=0.058：前 2.1 s 静态段 input 稳定在 -0.28~-0.34°、误差 0.28~0.32°、峰峰约 0.05°，为历轮最安静的稳态，说明 D=0.058 未引入噪声抖动；但 t≈3.27 s 一次强推扰（input 150 ms 内由 -0.28° 跳至 -3.09°，PWM 摆到 -18.97%/+16.03% 饱和）触发约 1 Hz 低频摆动，序列 -3.22→+1.148→+3.019→+0.945→-1.211→+1.949→-1.356，过零 4 次、包络每半周期约 0.6~0.65，窗口内未收敛，导致 AvgErr 0.856°、RMS 1.328°、峰峰 8.575°、估算速率 12.43°/s、状态 OSCILLATING。对比 Round10（同 P=4.85、D=0.053：峰峰 0.405°、decay 0.352、excursion 4.197°），本轮稳态更静但推扰衰减仍不足；对比 P=5.0 各轮（持续 1.1 Hz 极限环），可确证高 P 贴边是此前摆动主因、降 P 方向有效，当前残余问题是推扰后阻尼不足而非静态偏置或噪声。1 Hz 处 D 贡献仅约 P 的 7.5%，仍处低效区但可控；P 已不宜再降（会放大 0.3° 级静态偏置且稳态已优），I 固定 0.1。故在 1.15x 上限内将 D 由 0.058 上调至 0.066（约 1.138x），P=4.85、I=0.1 不变，观察推扰后摆动衰减与 settling 是否改善。",
+      "fallback_used": false,
+      "guardrail_notes": []
+    }
+  ],
+  "balance_phases": [
+    {
+      "type": "balance_phase",
+      "seq": 3,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 0,
+      "round": 1
+    },
+    {
+      "type": "balance_phase",
+      "seq": 104,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：角度 RMS 1.068度 > 0.800度；平均角度误差 1.057度 > 0.800度；末段角度误差 1.210度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 100,
+      "round": 1
+    },
+    {
+      "type": "balance_phase",
+      "seq": 489,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 100,
+      "round": 2
+    },
+    {
+      "type": "balance_phase",
+      "seq": 590,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：末段角度误差 0.810度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 200,
+      "round": 2
+    },
+    {
+      "type": "balance_phase",
+      "seq": 1150,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 200,
+      "round": 3
+    },
+    {
+      "type": "balance_phase",
+      "seq": 1251,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：角度 RMS 1.134度 > 0.800度；平均角度误差 1.134度 > 0.800度；末段角度误差 1.183度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 300,
+      "round": 3
+    },
+    {
+      "type": "balance_phase",
+      "seq": 1916,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 300,
+      "round": 4
+    },
+    {
+      "type": "balance_phase",
+      "seq": 2017,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：末段角度误差 0.733度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 400,
+      "round": 4
+    },
+    {
+      "type": "balance_phase",
+      "seq": 2806,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 400,
+      "round": 5
+    },
+    {
+      "type": "balance_phase",
+      "seq": 2907,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：末段角度误差 0.716度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 500,
+      "round": 5
+    },
+    {
+      "type": "balance_phase",
+      "seq": 3798,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 500,
+      "round": 6
+    },
+    {
+      "type": "balance_phase",
+      "seq": 3899,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：末段角度误差 0.688度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 600,
+      "round": 6
+    },
+    {
+      "type": "balance_phase",
+      "seq": 4622,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 600,
+      "round": 7
+    },
+    {
+      "type": "balance_phase",
+      "seq": 4723,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：末段角度误差 0.611度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 700,
+      "round": 7
+    },
+    {
+      "type": "balance_phase",
+      "seq": 5635,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 700,
+      "round": 8
+    },
+    {
+      "type": "balance_phase",
+      "seq": 5736,
+      "phase": "waiting_push",
+      "message": "静止检查通过：请轻推车身一下后立即松手。等待有效扰动（最多 45 秒）。",
+      "sample_index": 800,
+      "round": 8
+    },
+    {
+      "type": "balance_phase",
+      "seq": 6238,
+      "phase": "recovering",
+      "message": "检测到扰动：请完全松手，正在观察 10 秒恢复过程；不要再次推动。",
+      "sample_index": 1301,
+      "round": 8
+    },
+    {
+      "type": "balance_phase",
+      "seq": 6436,
+      "phase": "recovery_fail",
+      "message": "未持续恢复，末段峰值 3.17 度。本轮抗扰未通过；正在分析并调整参数。",
+      "sample_index": 1498,
+      "round": 8
+    },
+    {
+      "type": "balance_phase",
+      "seq": 7067,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 1498,
+      "round": 9
+    },
+    {
+      "type": "balance_phase",
+      "seq": 7168,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：角度 RMS 1.355度 > 0.800度；最大角度误差 3.041度 > 2.000度；摆幅 5.859度 > 2.000度；估计角速度 RMS 14.018度/秒 > 6.000度/秒；平均角度误差 1.138度 > 0.800度；末段角度误差 0.875度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 1598,
+      "round": 9
+    },
+    {
+      "type": "balance_phase",
+      "seq": 8366,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 1598,
+      "round": 10
+    },
+    {
+      "type": "balance_phase",
+      "seq": 8467,
+      "phase": "waiting_push",
+      "message": "静止检查通过：请轻推车身一下后立即松手。等待有效扰动（最多 45 秒）。",
+      "sample_index": 1698,
+      "round": 10
+    },
+    {
+      "type": "balance_phase",
+      "seq": 8551,
+      "phase": "recovering",
+      "message": "检测到扰动：请完全松手，正在观察 10 秒恢复过程；不要再次推动。",
+      "sample_index": 1781,
+      "round": 10
+    },
+    {
+      "type": "balance_phase",
+      "seq": 8748,
+      "phase": "recovery_fail",
+      "message": "未持续恢复，末段峰值 1.36 度。本轮抗扰未通过；正在分析并调整参数。",
+      "sample_index": 1977,
+      "round": 10
+    },
+    {
+      "type": "balance_phase",
+      "seq": 9833,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 1977,
+      "round": 11
+    },
+    {
+      "type": "balance_phase",
+      "seq": 9934,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：角度 RMS 1.328度 > 0.800度；最大角度误差 5.059度 > 2.000度；摆幅 8.575度 > 2.000度；估计角速度 RMS 12.427度/秒 > 6.000度/秒；平均角度误差 0.856度 > 0.800度；末段角度误差 1.287度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 2077,
+      "round": 11
+    },
+    {
+      "type": "balance_phase",
+      "seq": 11157,
+      "phase": "static_check",
+      "message": "静止检查：请松手，让车自行平衡；此时暂不轻推。",
+      "sample_index": 2077,
+      "round": 12
+    },
+    {
+      "type": "balance_phase",
+      "seq": 11258,
+      "phase": "static_not_ready",
+      "message": "尚未进入轻推测试：角度 RMS 1.473度 > 0.800度；最大角度误差 2.931度 > 2.000度；摆幅 5.630度 > 2.000度；估计角速度 RMS 15.833度/秒 > 6.000度/秒；平均角度误差 1.263度 > 0.800度；末段角度误差 1.230度 > 0.600度。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。",
+      "sample_index": 2177,
+      "round": 12
+    }
+  ]
+}

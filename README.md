@@ -4,7 +4,9 @@
 
 当前默认启用 **双路编码器读取 + UART/USB 串口命令控制**，BLE 命令入口暂时关闭，源码保留。初始化成功后，两路电机保持 **待机（STBY=0）**，不会自动转动。先发送 `enable`，再发送 `ab 20 20`，两轮以逻辑正向 20% 占空比、20kHz PWM 同向运行；也可用 `a`、`b` 单独控制。电机命令任务不依赖 IMU 是否初始化成功。逻辑正向在 A 路对应 IN1=1、IN2=0，在 B 路对应 IN1=0、IN2=1；按当前左右轮方向相反的反馈，已在应用层反转 B 路，无需交换接线。实际整车前进方向待实测。
 
-**每次上电、复位均保持待机，必须通过命令启动。** `enable` 只使能驱动并进入滑行，不会自行旋转。启动后串口断开会保持最后输出，没有断连自动停机或命令超时；发送 `standby` 停止，重启后回到待机，不恢复旧命令。当前为占空比控制，编码器用于读数；已加入独立三环 PID 算法模块，但尚未接管电机，详见 [两轮平衡车 PID 与串口数据](docs/balance_pid.md)。
+**每次上电、复位均保持待机，必须通过命令启动。** `enable` 只使能驱动并进入滑行，不会自行旋转。启动后串口断开会保持最后输出，没有断连自动停机或命令超时；发送 `standby` 停止，重启后回到待机，不恢复旧命令。手动模式仍是占空比控制；直立平衡模式会让三环 PID 接管电机，但增益需实车整定，详见 [两轮平衡车 PID 与串口数据](docs/balance_pid.md)。
+
+**已接入 LLM-PID-Tuner 在线调参。** 固件以 20 Hz 输出 `timestamp_ms,setpoint,input,pwm,error,p,i,d`，并接受 `STATUS`、`SET P:.. I:.. D:..`、`SETPOINT:..`、`RESET` 等大写命令；`SET` 可在平衡运行中直接改姿态环增益并自动接管。完整协议、推荐 `config.json`、操作顺序与安全边界见 [用 LLM-PID-Tuner 调直立环](docs/llm_pid_tuner.md)。
 
 ## 电机与编码器接线
 
@@ -31,6 +33,21 @@
 编码器 A/B 接入 ESP32 时必须为 3.3V 兼容电平；5V 推挽输出需电平转换。程序启用弱上拉，开漏输出如需外部上拉，应上拉到 3.3V。确认开发板已引出上述 GPIO 且未用于其他外设。
 
 编码器使用 PCNT 双通道正交四倍频计数、1µs 毛刺过滤，并在正负硬件限值处累计计数。A 超前 B 的相序计为正；实际电机正转读数若为负，断电交换该编码器 A/B 信号。累计值扩展为 64 位，约每 20ms 采样，每 200ms 输出一次带符号计数和每秒计数。尚未确认每圈计数及减速比，因此不把 `cps` 当作 RPM。
+
+## 用 LLM-PID-Tuner 调直立环
+
+固件默认打开 `CONFIG_CAR_PID_TUNER`，串口 115200 8N1。编译时还必须保持 `main/car_log_mode.h` 的 `CAR_ENCODER_ONLY_LOG` 为 0，否则只会输出编码器行。
+
+```text
+1. 关闭 ESP-IDF Monitor、网页查看器等占用串口的程序。
+2. 上电后静止 3 s 完成 Yaw 归零，把车扶正并保持静止。
+3. llm-pid-tuner.exe tune COM10
+   HARDWARE_PROFILE=generic_serial_csv，波特率 115200，填写初始 PID。
+4. 收到 SET 后固件自动记录直立角并接管；手扶确认前倾时两轮向前追。
+5. 每轮采集约 5 s，轻推车体 ±2° 给出扰动；收敛后抄下最终 P/I/D。
+```
+
+姿态环增益、速度/转向环增益和直立参考角会自动写入 NVS，掉电或复位后恢复；上电仍处于 STANDBY，发 `balance arm` 即可接管，不需要重新 `balance zero`。要重新校准直立角，扶正后发 `balance zero` 覆盖保存值。第一次请使用牵引绳或测试架，并查看 [逐步教程：用 LLM-PID-Tuner 调本车直立环](docs/llm_pid_tuner_tutorial.md)；方向检查、限幅和常见问题见 [用 LLM-PID-Tuner 调直立环](docs/llm_pid_tuner.md)。
 
 ## 串口命令及外部无线串口
 
@@ -176,7 +193,7 @@ ESP32-S3 使用 BLE，**不支持经典蓝牙 SPP**，普通 SPP 串口助手不
 - `components/imu660rc/imu660rc_fifo.c`：完整7字节FIFO记录读取、姿态标签筛选、最新样本选择及溢出检查。
 - `components/imu660rc/include/imu660rc.h`：引脚配置、初始化/读取/释放接口和输出数据结构。
 - `main/main.c`：启动电机任务，IMU 初始化重试、Yaw 归零和串口输出。
-- `main/car_motor_control.c`：上电待机、B路方向反转、串行执行有线/BLE 命令、编码器采样和遥测。
+- `main/car_motor_control.c`：上电待机、B路方向反转、串行执行有线/BLE 命令、编码器采样和遥测；含 LLM-PID-Tuner 的 20 Hz CSV、`STATUS`/`SET`/`SETPOINT`/`RESET` 解析、运行中改增益与自动接管。
 - `main/car_encoder.c`：双路 PCNT 正交四倍频计数及每秒计数。
 - `main/car_ble_uart.c`：保留的 NimBLE NUS 服务；当前不参与编译和启动。
 - `main/car_command_stream.c`：分包文本组装、换行及非法行丢弃。
@@ -213,6 +230,8 @@ ST参考：[SFLP官方示例](https://github.com/STMicroelectronics/STMems_Stand
 
 ## 验证范围
 
+2026-10-21（LLM-PID-Tuner 对接）：新增 `CONFIG_CAR_PID_TUNER` 与 `CONFIG_CAR_PID_TUNER_AUTO_ARM`，恢复 `CAR_ENCODER_ONLY_LOG=0`，控制节拍改为 1 kHz tick，UART 发送增加 2 KB 缓冲。固件输出 20 Hz `timestamp_ms,setpoint,input,pwm,error,p,i,d`（倾角相对直立参考、增益为姿态环 °→%），接受大写 `STATUS`/`SET P:.. I:.. D:..`/`SETPOINT:..`/`RESET`/`STANDBY`；`SET` 运行中限幅到 50/20/5 并清积分，静止直立时自动校准并接管。主机测试覆盖协议、限幅、拒绝尾随参数、自动接管和模式互斥；本次未烧录，实车方向、自动接管时机与调参效果待验证。详见 [用 LLM-PID-Tuner 调直立环](docs/llm_pid_tuner.md)。
+
 2026-10-18（独立车体倾角）：根据前后倾实测主要绕传感器Y轴，新增 `tilt_deg`、`tilt_rate_dps`、`tilt_valid` 综合遥测。倾角由世界竖直在传感器XZ平面的投影计算，不受世界航向影响；变化率包含侧倾时的其他轴修正，投影奇异时标记无效。不自动将上电姿态设为平衡点，旧网页角度输出保留。数学主机测试（含多航向同倾角及300组变化率参考）、FIFO主机测试和ESP-IDF构建通过；尚未烧录及实机验证新倾角，电机上电仍待机、PID仍未接管。
 
 2026-10-17（SFLP FIFO修正）：针对运行约10秒后嵌入页四元数持续为Inf的实机日志，改为ST公开FIFO记录接口、XYZ重建W、120Hz配置及水位INT2中断，增加关键配置寄存器回读。当前数学C主机测试和FIFO读取C主机测试通过，ESP-IDF编译、链接、镜像生成和容量检查通过。本次未烧录，持续运行故障是否消除、实际角度轴向及精度待实机验证。
@@ -242,3 +261,7 @@ TB6612FNG 本次未烧录，未验证 UART/USB 实际收发，也未测量 GPIO 
 2026-10-12：已在本机 ESP-IDF 5.5.4 环境完成 ESP32-S3 固件编译、链接和镜像生成，产物为 `build/Car.bin`。实际 C 角度转换函数通过主机测试：三个轴旋转、Pitch ±90°、全部 65536 种半精度编码，以及零四元数、NaN、Inf 等无效数据。测试脚本位于 `tests/test_angles.py`，使用 Clang 生成的主机 LLVM IR 和本机 llvmlite 执行 C 函数；这些测试工具不参与固件构建。
 
 本次未烧录，未进行传感器实测。代码的编译和数学测试不能代替接线后的硬件验证。烧录后应确认芯片 ID 为 0x70，持续输出角度，再分别绕三个轴转动模块检查方向和响应。
+
+## 串口静止与运动平衡模式
+
+见 [串口模式操作说明](docs/control_modes.md)。`mode hold` 使用设备已有 PID/零点启动平衡；`mode drive` 和 `move` 接入速度、转向目标。运动指令需持续更新，超时返回零速平衡。

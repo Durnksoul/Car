@@ -17,6 +17,47 @@ config CAR_BLE_UART
         Optional Nordic UART Service command input and encoder notifications.
         Disabled while using an external wireless UART bridge.
 
+config CAR_PID_TUNER
+    bool "Enable LLM-PID-Tuner serial protocol (CSV telemetry + SET P/I/D)"
+    default y
+    depends on CAR_MOTOR_CONTROL
+    help
+        Streams timestamp_ms,setpoint,input,pwm,error,p,i,d at the period
+        set by CAR_PID_TUNER_PERIOD_MS (default 20 Hz) and
+        accepts the uppercase commands used by KINGSTON-115/llm-pid-tuner:
+        STATUS, SET P:.. I:.. D:.., SET KP:.. KI:.. KD:.., SETPOINT:.., RESET.
+        SET applies the attitude-loop gains while the car keeps balancing and
+        arms the loop automatically once the car is upright and still.
+        While enabled, the human-readable attitude and encoder lines are
+        suppressed so the host parser sees an uninterrupted CSV stream.
+        Lowercase commands remain the normal manual interface.
+        Also set CAR_ENCODER_ONLY_LOG to 0 in main/car_log_mode.h.
+
+config CAR_PID_TUNER_AUTO_ARM
+    bool "Allow the tuner link to arm the balance loop on SET"
+    default y
+    depends on CAR_PID_TUNER
+    help
+        Without an explicit balance arm, the host tool cannot start the loop.
+        With this option, the first valid SET (Kp > 0) captures the current
+        tilt as upright reference when no calibration exists and arms only if
+        the car is within 10 degrees, slower than 5 deg/s and both wheels are
+        below 10 counts/s. Disarm with standby or balance off.
+
+config CAR_PID_TUNER_PERIOD_MS
+    int "CSV report period (ms)"
+    range 20 1000
+    default 50
+    depends on CAR_PID_TUNER
+    help
+        Period of the timestamp_ms,setpoint,input,pwm,error,p,i,d line.
+        Default 50 ms (20 Hz). Wireless bridges (Bluetooth, wireless
+        DAPLink, 433 MHz) may not forward the host SET within the host's
+        1 s write timeout while 20 Hz telemetry is streaming; use 200
+        (5 Hz) or 100 (10 Hz) for those links. A slower stream makes each
+        tuning round longer, so reduce the host BUFFER_SIZE accordingly
+        (for example 50 at 5 Hz gives about 10 s per round).
+
 config CAR_TB6612_SCOPE_TEST
     bool "Enable TB6612FNG serial command control for scope tests (no motors)"
     default n

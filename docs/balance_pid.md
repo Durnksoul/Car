@@ -1,8 +1,13 @@
-﻿# 两轮平衡车 PID 与串口使用
+# 两轮平衡车 PID 与串口使用
 
 完整日志已恢复：角度行、编码器行、telemetry、ESP 日志和指令回复均正常输出。
 PID 已接入电机控制任务；上电保持 STANDBY，增益为零，不自动运行。
 当前版本未经过实车直立调参，主机测试和编译通过不代表小车已经能自行站立。
+
+上位机自动调参已接入 LLM-PID-Tuner：`CONFIG_CAR_PID_TUNER` 打开后以 20 Hz 输出
+`timestamp_ms,setpoint,input,pwm,error,p,i,d`，并接受大写 `STATUS` / `SET P:.. I:.. D:..` /
+`SETPOINT:..` / `RESET`。`SET` 可在平衡运行中直接改增益并自动接管，协议与安全说明见
+[用 LLM-PID-Tuner 调直立环](llm_pid_tuner.md)。
 
 ## 已确认的方向
 
@@ -44,7 +49,9 @@ PID 使用实际 IMU 时间差，不承诺硬实时 120 Hz；遥测约 5 Hz，�
 | `balance arm` | 检查后使能并让 PID 接管；需待机、已校准、姿态 Kp>0、传感器新鲜且偏离参考不超过 5° |
 | `balance off` / `standby` | 退出平衡并关闭驱动 |
 
-参数只存 RAM，复位后增益和直立校准清除，需要重新设置。
+大写 `STATUS`、`SET P:x I:y D:z`、`SET KP:x KI:y KD:z`、`SETPOINT:x`、`RESET`、`STANDBY` 属于上位机调参入口，与上表小写命令互不冲突；`SET` 不要求待机，并会清空姿态环积分/微分状态。
+
+增益和直立参考角保存在 NVS，复位后自动恢复；上电仍是 STANDBY，发 `balance arm` 即可接管。重新 `balance zero` 会覆盖保存的参考角。
 手动模式仍使用 `enable` 后 `ab 20 20`；进入平衡模式不用先发 `enable`。
 平衡运行时拒绝手动速度、刹车、重复 enable、编码器清零和参数修改，查询仍可使用。
 

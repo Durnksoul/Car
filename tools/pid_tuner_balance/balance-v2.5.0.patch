@@ -1,0 +1,1063 @@
+diff --git a/core/balance_metrics.py b/core/balance_metrics.py
+new file mode 100644
+--- /dev/null
++++ b/core/balance_metrics.py
+@@ -0,0 +1,95 @@
++"""Angle-domain metrics for the car's millisecond CSV stream.
++
++Rate is a finite-difference estimate, not the IMU gyro measurement.
++The legacy overshoot field is zero/unused; all acceptance limits have units.
++"""
++import math
++
++LIMITS = dict(rms_error_deg=0.8, peak_error_deg=2.0,
++              peak_to_peak_deg=2.0, estimated_rate_rms_dps=6.0,
++              duration_s=4.0)
++
++def calculate_balance_metrics(data, reference_setpoint=None):
++    if len(data) < 2:
++        raise ValueError("Balance tuning needs at least two samples")
++    times = [float(d['timestamp']) / 1000 for d in data]
++    inputs = [float(d['input']) for d in data]
++    setpoints = [float(d['setpoint']) for d in data]
++    errors = [(sp if reference_setpoint is None else reference_setpoint)-pv
++              for sp,pv in zip(setpoints, inputs)]
++    pwms = [float(d['pwm']) for d in data]
++    if not all(math.isfinite(v) for v in times + inputs + setpoints + errors + pwms):
++        raise ValueError("Non-finite balance telemetry")
++    intervals = [b-a for a,b in zip(times,times[1:])]
++    if any(dt <= 0 or dt > 0.25 for dt in intervals):
++        raise ValueError("Balance telemetry timestamp reset/gap; restart the run")
++    # Mixed gains cannot be used to score a single PID trial.
++    for gain in ('p', 'i', 'd'):
++        values = [float(d[gain]) for d in data]
++        if not all(math.isfinite(v) for v in values) or max(values)-min(values)>1e-6:
++            raise ValueError("PID changed inside a trial; restart the run")
++    rates = [(b-a)/dt for a,b,dt in zip(inputs,inputs[1:],intervals)]
++    rms = lambda values: math.sqrt(sum(v*v for v in values)/len(values))
++    absolute = [abs(e) for e in errors]
++    tail = max(1,len(data)//5)
++    crossings = 0
++    sign = 0
++    for e in errors:
++        next_sign = 1 if e > 0.2 else -1 if e < -0.2 else 0
++        if next_sign:
++            if sign and next_sign != sign:
++                crossings += 1
++            sign = next_sign
++    metrics = dict(metric_profile='balance_car_v1',
++        avg_error=sum(absolute)/len(data), max_error=max(absolute),
++        steady_state_error=sum(absolute[-tail:])/tail, overshoot=0.0,
++        overshoot_applicable=False, zero_crossings=crossings,
++        rms_error_deg=rms(errors), peak_error_deg=max(absolute),
++        peak_to_peak_deg=max(errors)-min(errors),
++        estimated_rate_rms_dps=rms(rates), duration_s=times[-1]-times[0],
++        pwm_step_rms_pct=rms([b-a for a,b in zip(pwms,pwms[1:])]),
++        setpoint=float(data[-1]['setpoint']) if reference_setpoint is None else reference_setpoint)
++    if reference_setpoint is not None:
++        metrics.update(nominal_setpoint_deg=reference_setpoint,
++                       effective_setpoint_min_deg=min(setpoints),
++                       effective_setpoint_max_deg=max(setpoints),
++                       effective_setpoint_source='inner_target_including_speed_feedback')
++    passed = all(metrics[k] <= v for k,v in LIMITS.items() if k != 'duration_s')
++    if metrics['duration_s'] < LIMITS['duration_s']:
++        metrics['status'] = 'INSUFFICIENT_DATA'
++    elif passed:
++        metrics['status'] = 'STABLE'
++    elif crossings >= 2 or metrics['estimated_rate_rms_dps'] > LIMITS['estimated_rate_rms_dps']:
++        metrics['status'] = 'OSCILLATING'
++    else:
++        metrics['status'] = 'SLOW_RESPONSE'
++    return metrics
++
++def balance_score(metrics):
++    # Continuous objective allows comparing two still-oscillatory trials.
++    recovery_cost = 0.
++    if metrics.get('recovery_tested'):
++        settling = metrics.get('settling_time_s')
++        recovery_cost = (0.2*(10. if settling is None else settling)
++                         + 2.*min(metrics['decay_ratio'],5.)
++                         + 0.1*metrics['recovery_peak_error_deg'])
++    return (recovery_cost + metrics['rms_error_deg'] + 0.35*metrics['peak_to_peak_deg']
++            + 0.1*metrics['estimated_rate_rms_dps']
++            + 0.01*metrics['pwm_step_rms_pct'])
++
++
++def require_armed(bridge):
++    """Avoid scoring an unpowered or fallen car as excellent control."""
++    import time
++    if not bridge.send_profile_command('STATUS'):
++        raise RuntimeError('Cannot query car STATUS')
++    deadline = time.monotonic() + 2.0
++    while time.monotonic() < deadline:
++        line = bridge.read_line()
++        if not line or '# STATUS:' not in str(line):
++            continue
++        fields = dict(item.split('=',1) for item in str(line).split() if '=' in item)
++        if fields.get('Armed') != '1' or fields.get('State') != '1':
++            raise RuntimeError('Car is not balancing (Armed=1 State=1 required); no PID applied')
++        return
++    raise RuntimeError('Car STATUS response missing; no trial can be scored')
+diff --git a/core/balance_recovery.py b/core/balance_recovery.py
+new file mode 100644
+--- /dev/null
++++ b/core/balance_recovery.py
+@@ -0,0 +1,170 @@
++"""Manual push-and-release trials; never inject motor commands or setpoints."""
++import math
++import time
++from core.adapters import HardwareEnv
++from core.balance_metrics import LIMITS, calculate_balance_metrics, require_armed
++from core.config import CONFIG
++from core.env import controller_requests_abort
++
++TRIGGER_DEG = 1.5
++TRIGGER_POINTS = 3
++MAX_INITIAL_DEG = 6.0
++WAIT_SECONDS = 45.0
++OBSERVE_SECONDS = 10.0
++SETTLE_ERROR_DEG = 0.8
++SETTLE_RATE_DPS = 6.0
++SETTLE_HOLD_SECONDS = 2.0
++MAX_SETTLE_SECONDS = 5.0
++MAX_DECAY_RATIO = 0.5
++
++class RecoveryNotVerified(RuntimeError):
++    pass
++
++def calculate_recovery_metrics(rows, baseline_input):
++    # Validate the entire trial, including the disturbance, before scoring its tail.
++    calculate_balance_metrics(rows, reference_setpoint=0.0)
++    start = rows[0]['timestamp']
++    times = [(row['timestamp']-start)/1000 for row in rows]
++    if times[-1] < OBSERVE_SECONDS:
++        raise RecoveryNotVerified('抗扰采样不足 10 秒，本次未验证')
++    errors = [abs(row['input']) for row in rows]  # physical upright error, not moving inner target
++    rates = [0.] + [abs((b['input']-a['input'])/((b['timestamp']-a['timestamp'])/1000))
++                    for a,b in zip(rows,rows[1:])]
++    # The stable suffix must extend to the end, not merely touch the target once.
++    suffix = len(rows)
++    for i in range(len(rows)-1,-1,-1):
++        if errors[i] > SETTLE_ERROR_DEG or rates[i] > SETTLE_RATE_DPS:
++            break
++        suffix = i
++    settling = None
++    if suffix < len(rows) and times[-1]-times[suffix] >= SETTLE_HOLD_SECONDS:
++        settling = times[suffix]
++    early = max(e for e,t in zip(errors,times) if t <= 2.)
++    late = max(e for e,t in zip(errors,times) if t >= OBSERVE_SECONDS-4.)
++    decay = late / max(early,0.01)
++    excursion = max(abs(row['input']-baseline_input) for row in rows)
++    tail = [row for row,t in zip(rows,times) if t >= OBSERVE_SECONDS-4.]
++    tail_metrics = calculate_balance_metrics(tail, reference_setpoint=0.0)
++    # Tail endpoints can differ by <4 s at a 20 Hz sample grid; duration is
++    # validated by the full trial, not by the rounded final-four-second slice.
++    tail_ok = (tail_metrics['rms_error_deg'] <= .8 and tail_metrics['peak_error_deg'] <= 2.
++               and tail_metrics['peak_to_peak_deg'] <= 2.
++               and tail_metrics['estimated_rate_rms_dps'] <= 6.)
++    passed = (excursion >= TRIGGER_DEG and settling is not None
++              and settling <= MAX_SETTLE_SECONDS and decay <= MAX_DECAY_RATIO and tail_ok
++              and tail_metrics['avg_error'] <= CONFIG['GOOD_ENOUGH_AVG_ERROR']
++              and tail_metrics['steady_state_error'] <= CONFIG['GOOD_ENOUGH_STEADY_STATE_ERROR'])
++    return {**tail_metrics, 'duration_s': times[-1], 'recovery_required': True,
++            'recovery_tested': True, 'recovery_passed': passed,
++            'recovery_peak_error_deg': max(errors), 'settling_time_s': settling,
++            'decay_ratio': decay, 'late_peak_error_deg': late,
++            'disturbance_excursion_deg': excursion,
++            'disturbance_source': 'manual_push_unmeasured_force',
++            'effective_setpoint_min_deg': min(row['setpoint'] for row in rows),
++            'effective_setpoint_max_deg': max(row['setpoint'] for row in rows),
++            'status': 'STABLE' if passed else 'OSCILLATING'}
++
++def static_failure_reasons(metrics):
++    checks = [
++        ('rms_error_deg', LIMITS['rms_error_deg'], '角度 RMS', '度'),
++        ('peak_error_deg', LIMITS['peak_error_deg'], '最大角度误差', '度'),
++        ('peak_to_peak_deg', LIMITS['peak_to_peak_deg'], '摆幅', '度'),
++        ('estimated_rate_rms_dps', LIMITS['estimated_rate_rms_dps'], '估计角速度 RMS', '度/秒'),
++        ('avg_error', CONFIG['GOOD_ENOUGH_AVG_ERROR'], '平均角度误差', '度'),
++        ('steady_state_error', CONFIG['GOOD_ENOUGH_STEADY_STATE_ERROR'], '末段角度误差', '度'),
++    ]
++    reasons = [f'{label} {metrics[key]:.3f}{unit} > {limit:.3f}{unit}'
++               for key,limit,label,unit in checks if metrics[key] > limit]
++    if metrics['duration_s'] < LIMITS['duration_s']:
++        reasons.append(f"采样时长 {metrics['duration_s']:.2f}秒 < {LIMITS['duration_s']:.2f}秒")
++    if metrics['status'] != 'STABLE' and not reasons:
++        reasons.append(f"采样状态 {metrics['status']}")
++    return reasons
++
++class BalanceRecoveryEnv(HardwareEnv):
++    def __init__(self, *args, phase_callback=None, **kwargs):
++        super().__init__(*args, **kwargs)
++        self.phase_callback = phase_callback or (lambda phase,message: None)
++        self.recovery_metrics = {}
++        self.expected_pid = None
++        self.expected_setpoint = None
++
++    def _phase(self, phase, message):
++        self.phase_callback(phase,message)
++
++    def _read_sample(self, deadline):
++        while time.monotonic() < deadline:
++            if controller_requests_abort(self.controller):
++                raise RecoveryNotVerified('已停止，抗扰能力未验证')
++            line = self.bridge.read_line()
++            if line and '# Setpoint Updated:' in str(line):
++                raise RecoveryNotVerified('检测到手动 SETPOINT 命令，请保持 SP=0 后重新开始测试')
++            row = self.bridge.parse_data(line) if line else None
++            if row is None:
++                continue
++            values = [float(row[k]) for k in ('timestamp','input','setpoint','pwm','p','i','d')]
++            if not all(math.isfinite(v) for v in values):
++                raise RecoveryNotVerified('采样数值无效，抗扰能力未验证')
++            if any(abs(row[k]-self.expected_pid[k])>1e-6 for k in ('p','i','d')):
++                raise RecoveryNotVerified('测试过程中 PID 改变，请重新开始')
++            self.current_pid = {k:row[k] for k in ('p','i','d')}
++            self.current_setpoint = row['setpoint']
++            self.notify_sample(row)
++            return row
++        return None
++
++    def collect_samples(self):
++        self.recovery_metrics = dict(recovery_required=True,recovery_tested=False,recovery_passed=False)
++        self._phase('static_check','静止检查：请松手，让车自行平衡；此时暂不轻推。')
++        static_rows = super().collect_samples()
++        if not static_rows:
++            return static_rows
++        m = calculate_balance_metrics(static_rows, reference_setpoint=0.0)
++        failed = static_failure_reasons(m)
++        if failed:
++            self._phase('static_not_ready','尚未进入轻推测试：' + '；'.join(failed)
++                        + '。角度误差超标也可能是静止时偏离零点，不代表车一定在运动；暂不轻推。')
++            return static_rows
++        self.expected_pid = {k: static_rows[-1][k] for k in ('p','i','d')}
++        self.expected_setpoint = static_rows[-1]['setpoint']
++        baseline = sum(row['input'] for row in static_rows[-20:])/len(static_rows[-20:])
++        self._phase('waiting_push','静止检查通过：请轻推车身一下后立即松手。等待有效扰动（最多 45 秒）。')
++        deadline = time.monotonic()+WAIT_SECONDS
++        trigger = []
++        previous = static_rows[-1]['timestamp']
++        while time.monotonic() < deadline:
++            row = self._read_sample(deadline)
++            if row is None:
++                break
++            if row['timestamp'] <= previous:
++                raise RecoveryNotVerified('设备时间戳重置，抗扰能力未验证')
++            previous = row['timestamp']
++            excursion = abs(row['input']-baseline)
++            if excursion > MAX_INITIAL_DEG:
++                raise RecoveryNotVerified('初始扰动过大，请重新扶正，使用更轻的单次推动')
++            trigger = trigger+[row] if excursion >= TRIGGER_DEG else []
++            if len(trigger) >= TRIGGER_POINTS:
++                break
++        if len(trigger) < TRIGGER_POINTS:
++            raise RecoveryNotVerified('未检测到有效轻推：静止检查通过，抗扰能力未验证；PID 未因静止达标而改变')
++        self._phase('recovering','检测到扰动：请完全松手，正在观察 10 秒恢复过程；不要再次推动。')
++        rows = list(trigger)
++        wall_deadline = time.monotonic()+OBSERVE_SECONDS+5.
++        while (rows[-1]['timestamp']-rows[0]['timestamp'])/1000 < OBSERVE_SECONDS:
++            row = self._read_sample(wall_deadline)
++            if row is None:
++                raise RecoveryNotVerified('恢复采样超时，抗扰能力未验证')
++            dt = (row['timestamp']-rows[-1]['timestamp'])/1000
++            if not 0 < dt <= .25:
++                raise RecoveryNotVerified('恢复采样中断或设备复位，抗扰能力未验证')
++            rows.append(row)
++        require_armed(self.bridge)
++        self.recovery_metrics = calculate_recovery_metrics(rows,baseline)
++        passed = self.recovery_metrics['recovery_passed']
++        settled = self.recovery_metrics['settling_time_s']
++        detail = ('未持续恢复' if settled is None else f'恢复用时 {settled:.2f} 秒')
++        detail += f"，末段峰值 {self.recovery_metrics['late_peak_error_deg']:.2f} 度。"
++        self._phase('recovery_pass' if passed else 'recovery_fail',
++                    detail + ('本轮抗扰通过；等待下一轮提示后再轻推。' if passed else
++                              '本轮抗扰未通过；正在分析并调整参数。'))
++        return rows
+diff --git a/core/buffer.py b/core/buffer.py
+--- a/core/buffer.py
++++ b/core/buffer.py
+@@ -12,6 +12,9 @@
+     """增强版数据缓冲器"""
+ 
+     def __init__(self, max_size: int = 100):
++        self.balance_mode = False
++        self.extra_metrics = {}
++        self.recovery_required = False
+         self.max_size    = max_size
+         self.buffer      = deque(maxlen=max_size)
+         self.current_pid = {"p": 1.0, "i": 0.1, "d": 0.05}
+@@ -45,6 +48,12 @@
+         """计算高级控制指标"""
+         if not self.buffer:
+             return {}
++
++        if self.balance_mode:
++            from core.balance_metrics import calculate_balance_metrics
++            return {**calculate_balance_metrics(list(self.buffer),
++                                                reference_setpoint=0.0 if self.recovery_required else None),
++                    "recovery_required": self.recovery_required, **self.extra_metrics}
+ 
+         data       = list(self.buffer)
+         inputs     = [d.get("input", 0) for d in data]
+@@ -94,6 +103,19 @@
+ 
+     def to_prompt_data(self) -> str:
+         metrics = self.calculate_advanced_metrics()
++        if self.balance_mode:
++            import json
++            return ("BALANCING CAR: angles in degrees, timestamp in milliseconds. "
++                    "Percentage overshoot is undefined near zero and MUST NOT be used. "
++                    "For recovery_required=true, metrics use nominal upright SP=0 degrees; "
++                    "sample setpoint is the effective inner-loop target including outer speed feedback, "
++                    "so it may vary without any manual target change. "
++                    "Estimated rate is angle finite difference, not measured gyro. "
++                    "Minimize RMS angle, peak-to-peak rocking and estimated rate together. "
++                    "Do not claim no wheel drift: wheel speed is absent from this stream. "
++                    "Return TUNING with a bounded PID proposal until host acceptance.\n"
++                    + json.dumps(metrics) + "\nCurrent PID: " + json.dumps(self.current_pid)
++                    + "\nSamples: " + json.dumps(list(self.buffer)[::max(1,len(self.buffer)//30)]))
+ 
+         # 下采样：如果数据太多，每隔几个点取一个
+         all_data     = list(self.buffer)
+diff --git a/core/config.py b/core/config.py
+--- a/core/config.py
++++ b/core/config.py
+@@ -96,6 +96,8 @@
+     "HTTPS_PROXY"                   : "",
+     "ALL_PROXY"                     : "",
+     "NO_PROXY"                      : "",
++    "BALANCE_MODE"                  : False,
++    "BALANCE_ACTIVE"                : False,
+     "BUFFER_SIZE"                   : 100,
+     "MIN_ERROR_THRESHOLD"           : 0.3,
+     "MAX_TUNING_ROUNDS"             : 50,
+diff --git a/core/tuning_engine.py b/core/tuning_engine.py
+--- a/core/tuning_engine.py
++++ b/core/tuning_engine.py
+@@ -183,6 +183,7 @@
+ 
+         _console(emit_console, f"[Round {round_index}] Collected {len(samples)} samples.")
+ 
++        session.buffer.extra_metrics = dict(getattr(env, "recovery_metrics", {}))
+         evaluation = evaluate_completed_round(session, dict(session.buffer.current_pid))
+         publish_round_metrics(event_sink, evaluation, round_index)
+ 
+@@ -255,6 +256,20 @@
+             _console(emit_console, f"[Observe] {message}")
+             _emit_lifecycle(event_sink, start_time, "observing_pending", message)
+ 
++        if session.buffer.balance_mode and round_index >= CONFIG["MAX_TUNING_ROUNDS"]:
++            session.round_num = round_index
++            break
++        if session.buffer.balance_mode:
++            prompt_context["balance_car_control"] = (
++                "One shared attitude PID drives both wheels. This is a balancing inverted pendulum, "
++                "not a heater or wheel-speed loop. Tune attitude P and D; hold I=0.1 as bounded. "
++                "Firmware D uses filtered gyro damping. Start from the measured PID, do not reset gains. "
++                "Try a distinct bounded candidate when measurements fail, comparing prior measured scores. "
++                "Do not keep identical gains with DONE while the car rocks. Host alone decides convergence. "
++                "When recovery_tested=true, compare settling_time_s (null means not settled), decay_ratio "
++                "and late_peak_error_deg after a manual push-and-release. Minimize persistent oscillation. "
++                "I=0.1 is intentionally fixed, do not recommend raising I bounds. Disturbance force is unmeasured."
++            )
+         prompt_data = session.buffer.to_prompt_data()
+         history_text = session.history.to_prompt_text()
+         current_stream_round[0] = evaluation.round_index
+@@ -357,7 +372,10 @@
+             if sec_notes:
+                 _console(emit_console, f"[Guardrail] Controller 2: {'; '.join(sec_notes)}")
+ 
+-        env.apply_pid(safe_primary, safe_secondary)
++        observed_primary, observed_secondary = env.get_current_pid()
++        if (not session.buffer.balance_mode or safe_primary != observed_primary
++                or (safe_secondary is not None and safe_secondary != observed_secondary)):
++            env.apply_pid(safe_primary, safe_secondary)
+         actual_primary, actual_secondary = env.get_current_pid()
+         session.buffer.current_pid = dict(actual_primary)
+         session.buffer.secondary_pid = (
+@@ -371,6 +389,18 @@
+             break
+         _console(emit_console, "[CMD] Applied new PID parameters.")
+ 
++    if session.buffer.balance_mode and session.completed_reason == "max_rounds_reached" and session.best_result:
++        # Restore only a PID already measured in this session. Its score is historical.
++        best = session.best_result
++        actual, _ = env.get_current_pid()
++        if actual != best["pid"]:
++            env.apply_pid(best["pid"])
++            issue = str(getattr(env, "last_apply_issue", "") or "")
++            if issue:
++                raise RuntimeError(issue)
++        session.buffer.current_pid = dict(best["pid"])
++        session.last_metrics = {**best["metrics"], "measured_round": best["round"],
++                                "source": "best_observed_trial"}
+     if (
+         session.round_num >= CONFIG["MAX_TUNING_ROUNDS"]
+         and session.completed_reason == "max_rounds_reached"
+diff --git a/core/tuning_session.py b/core/tuning_session.py
+--- a/core/tuning_session.py
++++ b/core/tuning_session.py
+@@ -67,7 +67,12 @@
+     max_history: int = 5,
+     require_avg_error_threshold: bool = True,
+ ) -> TuningSessionState:
+-    buffer = AdvancedDataBuffer(max_size=CONFIG["BUFFER_SIZE"])
++    size = CONFIG["BUFFER_SIZE"]
++    if CONFIG.get("BALANCE_ACTIVE") and CONFIG.get("BALANCE_REQUIRE_RECOVERY"):
++        size = max(size, 1000)
++    buffer = AdvancedDataBuffer(max_size=size)
++    buffer.balance_mode = bool(CONFIG.get("BALANCE_ACTIVE", False))
++    buffer.recovery_required = bool(buffer.balance_mode and CONFIG.get("BALANCE_REQUIRE_RECOVERY"))
+     if initial_pid is not None:
+         buffer.current_pid = dict(initial_pid)
+     if setpoint is not None:
+@@ -165,7 +170,8 @@
+     elif state.stable_rounds >= CONFIG["REQUIRED_STABLE_ROUNDS"]:
+         completed_reason = "stable_rounds_reached"
+     elif (
+-        not good_enough
++        not state.buffer.balance_mode
++        and not good_enough
+         and metrics["avg_error"] < CONFIG["MIN_ERROR_THRESHOLD"]
+         and metrics["status"] == "STABLE"
+     ):
+@@ -252,6 +258,8 @@
+     *,
+     limits: Optional[Dict[str, Dict[str, float]]] = None,
+ ) -> DecisionOutcome:
++    if not result and state.buffer.balance_mode:
++        raise RuntimeError("Balance tuning stopped: AI response unavailable; PID unchanged")
+     if not result:
+         result = build_fallback_suggestion(
+             evaluation.current_pid,
+@@ -270,6 +278,10 @@
+     fallback_used = bool(result.get("fallback_used"))
+     status = str(result.get("status", "TUNING")).upper()
+ 
++    if state.buffer.balance_mode and status == "DONE":
++        status = "TUNING"
++        guardrail_notes.append("DONE rejected: host requires consecutive measured balance passes.")
++        analysis += " Host rejected premature DONE; continuing measured trials."
+     state.history.add_record(
+         evaluation.round_index,
+         evaluation.current_pid,
+@@ -307,6 +319,9 @@
+         "rounds_completed": state.last_round,
+         "final_pid": dict(final_pid),
+         "final_metrics": dict(state.last_metrics),
++        "metric_profile": "balance_car_v1" if state.buffer.balance_mode else "generic",
++        "converged": state.completed_reason == "stable_rounds_reached",
++        "recovery_verified": bool(state.last_metrics.get("recovery_passed")) and state.completed_reason == "stable_rounds_reached",
+         "stopped": stopped,
+         "fallback_count": state.fallback_count,
+         "guardrail_count": state.guardrail_count,
+diff --git a/core/tuning_loop.py b/core/tuning_loop.py
+--- a/core/tuning_loop.py
++++ b/core/tuning_loop.py
+@@ -27,6 +27,8 @@
+         zero_crossings=int(m["zero_crossings"]),
+         status=str(m["status"]),
+         stable_rounds=evaluation.stable_rounds,
++        pid=dict(evaluation.current_pid),
++        balance_metrics={k: v for k, v in m.items() if k not in {"avg_error", "max_error", "steady_state_error", "overshoot", "zero_crossings", "status"}},
+     )
+ 
+ 
+@@ -37,6 +39,7 @@
+         event_sink, EVENT_DECISION,
+         round=round_index,
+         action=decision.action,
++        proposed_pid=dict(decision.safe_pid),
+         analysis_summary=decision.analysis,
+         fallback_used=decision.fallback_used,
+         guardrail_notes=list(decision.guardrail_notes),
+diff --git a/pid_safety.py b/pid_safety.py
+--- a/pid_safety.py
++++ b/pid_safety.py
+@@ -295,9 +295,12 @@
+ 
+ def score_metrics(metrics: Dict[str, float]) -> float:
+     """将控制表现压缩成一个可比较的分数，越低越好。"""
+-    avg_error          = float(metrics.get("avg_error", 1e9) or 1e9)
+-    steady_state_error = float(metrics.get("steady_state_error", 1e9) or 1e9)
+-    overshoot          = float(metrics.get("overshoot", 1e9) or 1e9)
++    if metrics.get("metric_profile") == "balance_car_v1":
++        from core.balance_metrics import balance_score
++        return balance_score(metrics)
++    avg_error          = _to_float(metrics.get("avg_error", 1e9), 1e9)
++    steady_state_error = _to_float(metrics.get("steady_state_error", 1e9), 1e9)
++    overshoot          = _to_float(metrics.get("overshoot", 1e9), 1e9)
+     status             = str(metrics.get("status", "UNKNOWN")).upper()
+ 
+     status_penalty = 0.0
+@@ -328,7 +331,11 @@
+     ``secondary_pid`` is captured alongside the primary so that dual-loop
+     rollback can restore both controllers together.
+     """
+-    if str(metrics.get("status", "UNKNOWN")).upper() != "STABLE":
++    if (metrics.get("metric_profile") != "balance_car_v1"
++            and str(metrics.get("status", "UNKNOWN")).upper() != "STABLE"):
++        return best_result
++
++    if metrics.get("recovery_required") and not metrics.get("recovery_tested"):
+         return best_result
+ 
+     candidate: Dict[str, Any] = {
+@@ -356,7 +363,8 @@
+     require_avg_error  = bool(rules.get("require_avg_error_threshold", True))
+ 
+     return (
+-        status == "STABLE"
++        (not metrics.get("recovery_required") or bool(metrics.get("recovery_passed")))
++        and status == "STABLE"
+         and (not require_avg_error or avg_error <= rules["avg_error_threshold"])
+         and steady_state_error <= rules["steady_state_error_threshold"]
+         and overshoot          <= rules["overshoot_threshold"]
+@@ -371,20 +379,25 @@
+     """当前表现明显劣化时，建议回滚到历史最佳稳定参数。"""
+     rules = rules or DEFAULT_ROLLBACK_RULES
+ 
++    if current_metrics.get("recovery_required") and not current_metrics.get("recovery_tested"):
++        return False
+     if not is_better_metrics(best_metrics, current_metrics):
+         return False
+ 
++    if current_metrics.get("metric_profile") == "balance_car_v1":
++        return score_metrics(current_metrics) > max(score_metrics(best_metrics)*1.25,
++                                                  score_metrics(best_metrics)+0.5)
+     current_status = str(current_metrics.get("status", "UNKNOWN")).upper()
+     best_status = str(best_metrics.get("status", "UNKNOWN")).upper()
+     if best_status == "STABLE" and current_status != "STABLE":
+         return True
+ 
+-    current_avg       = float(current_metrics.get("avg_error", 1e9) or 1e9)
+-    best_avg          = float(best_metrics.get("avg_error", 1e9) or 1e9)
+-    current_steady    = float(current_metrics.get("steady_state_error", 1e9) or 1e9)
+-    best_steady       = float(best_metrics.get("steady_state_error", 1e9) or 1e9)
+-    current_overshoot = float(current_metrics.get("overshoot", 1e9) or 1e9)
+-    best_overshoot    = float(best_metrics.get("overshoot", 1e9) or 1e9)
++    current_avg       = _to_float(current_metrics.get("avg_error", 1e9), 1e9)
++    best_avg          = _to_float(best_metrics.get("avg_error", 1e9), 1e9)
++    current_steady    = _to_float(current_metrics.get("steady_state_error", 1e9), 1e9)
++    best_steady       = _to_float(best_metrics.get("steady_state_error", 1e9), 1e9)
++    current_overshoot = _to_float(current_metrics.get("overshoot", 1e9), 1e9)
++    best_overshoot    = _to_float(best_metrics.get("overshoot", 1e9), 1e9)
+ 
+     avg_regression    = current_avg > max(best_avg * rules["avg_error_ratio"], best_avg + rules["avg_error_margin"])
+     steady_regression = current_steady > max(
+diff --git a/desktop/app.py b/desktop/app.py
+--- a/desktop/app.py
++++ b/desktop/app.py
+@@ -95,6 +95,10 @@
+         self.export_button.setEnabled(False)
+         heading.addWidget(self.export_button, 0, Qt.AlignmentFlag.AlignVCenter)
+         content.addLayout(heading)
++        self.balance_instruction = label("抗扰测试：点击开始后，先松手等待静止检查；看到提示再轻推。", "muted")
++        self.balance_instruction.setWordWrap(True)
++        self.balance_instruction.setVisible(bool(CONFIG.get("BALANCE_MODE")))
++        content.addWidget(self.balance_instruction)
+ 
+         metrics = QHBoxLayout()
+         metrics.setSpacing(12)
+@@ -177,6 +181,12 @@
+         self.timer.setInterval(50)
+         self.timer.timeout.connect(self._poll)
+         self.timer.start()
++        if CONFIG.get("BALANCE_MODE"):
++            self.mode.setCurrentIndex(self.mode.findData("hardware"))
++            self.mode.setEnabled(False)
++            self.port.setCurrentText("COM15")
++            self.setpoint.setValue(0)
++            self.setpoint.setEnabled(False)
+         self._mode_changed()
+         self.preferences.language_changed.connect(self.retranslate)
+         self.preferences.theme_changed.connect(self._theme_changed)
+@@ -332,12 +342,12 @@
+         self.advanced_button.toggled.connect(self.advanced.setVisible)
+         self.rounds = QSpinBox()
+         self.rounds.setRange(1, 500)
+-        self.rounds.setValue(12)
++        self.rounds.setValue(int(CONFIG["MAX_TUNING_ROUNDS"]))
+         advanced_form.addRow(self._label("rounds"), self.rounds)
+         self.samples = QSpinBox()
+-        self.samples.setRange(50, 5000)
++        self.samples.setRange(100 if CONFIG.get("BALANCE_MODE") else 50, 5000)
+         self.samples.setSingleStep(50)
+-        self.samples.setValue(100)
++        self.samples.setValue(int(CONFIG["BUFFER_SIZE"]))
+         advanced_form.addRow(self._label("batch"), self.samples)
+         self.speed = QComboBox()
+         for factor in (1, 5, 10, 25, 50):
+@@ -463,6 +473,7 @@
+         elif kind == "starting":
+             message = t("starting_" + event["strategy"])
+         elif kind == "decision":
++            self.archive.decisions.append(dict(event))
+             heading, summary = self._decision_text(event)
+             notes = "\n".join(runtime(note) for note in event.get("guardrail_notes", []))
+             message = heading + "\n\n" + summary + ("\n\n" + t("guardrails") + "\n" + notes if notes else "")
+@@ -609,7 +620,9 @@
+         self.start_button.setEnabled(not active)
+         self.pause_button.setEnabled(active)
+         self.stop_button.setEnabled(active)
+-        self.apply_setpoint.setEnabled(active)
++        self.apply_setpoint.setEnabled(active and not CONFIG.get("BALANCE_MODE"))
++        if CONFIG.get("BALANCE_MODE"):
++            self.mode.setEnabled(False)
+         self._render_badge()
+         if not active:
+             self._mode_changed()
+@@ -685,16 +698,21 @@
+             self.metric_cards[0].value.setText(f"{event['input']:.2f}")
+             self._latest_pid = {k: event[k] for k in ("p", "i", "d")}
+             self._render_pid()
++        elif kind == "balance_phase":
++            self.archive.balance_phases.append({**event, "sample_index": self.archive.count, "round": self.archive.round})
++            message = self._safe_text(event.get("message", ""))
++            self.balance_instruction.setText(message)
++            self._append_log({"type": "log", "label": event.get("phase", "balance"), "message": message})
+         elif kind == "round_metrics":
+             self.archive.metrics.append(dict(event))
+             self._round = event["round"]
+             self.archive.round = self._round + 1
+-            for card_widget, key, suffix in zip(self.metric_cards[1:], ("avg_error", "overshoot", "steady_state_error"), ("", "%", "")):
++            for card_widget, key, suffix in zip(self.metric_cards[1:], ("avg_error", "max_error" if CONFIG.get("BALANCE_MODE") else "overshoot", "steady_state_error"), ("", " deg" if CONFIG.get("BALANCE_MODE") else "%", "")):
+                 card_widget.value.setText(f"{event[key]:.2f}{suffix}")
+             row = self.table.rowCount()
+             self.table.insertRow(row)
+             values = [str(event["round"]), f"{event['avg_error']:.3f}", f"{event['steady_state_error']:.3f}",
+-                      f"{event['overshoot']:.2f}", token(event["status"]), str(event["stable_rounds"])]
++                      f"{event['max_error'] if CONFIG.get('BALANCE_MODE') else event['overshoot']:.2f}", token(event["status"]), str(event["stable_rounds"])]
+             for column, value in enumerate(values):
+                 self.table.setItem(row, column, QTableWidgetItem(value))
+             self.table.scrollToBottom()
+@@ -728,6 +746,12 @@
+                 self._analysis_event = {"type": "error", "message": message}
+                 self._render_analysis()
+         elif kind == "session_finished":
++            if CONFIG.get("BALANCE_MODE"):
++                result = event.get("result", {})
++                if result.get("recovery_verified"):
++                    self.balance_instruction.setText("完成：连续三轮抗扰恢复通过。")
++                elif result.get("completed_reason") != "disturbance_not_verified":
++                    self.balance_instruction.setText("本次结束：抗扰验收尚未通过，请导出报告分析。")
+             self.archive.result = event.get("result", {})
+             reason = self.archive.result.get("completed_reason", "")
+             self._finished = True
+diff --git a/desktop/session.py b/desktop/session.py
+--- a/desktop/session.py
++++ b/desktop/session.py
+@@ -14,6 +14,7 @@
+ 
+ from core.adapters import HardwareEnv, PythonSimEnv, SimulinkEnv
+ from core.buffer import AdvancedDataBuffer
++from core.balance_recovery import RecoveryNotVerified
+ from core.config import CONFIG
+ from core.i18n import get_language
+ from desktop.i18n import t
+@@ -59,6 +60,8 @@
+             raise ValueError(t("unsafe_pid"))
+         if not 1 <= self.rounds <= 500 or not 50 <= self.samples <= 5000:
+             raise ValueError(t("invalid_counts"))
++        if self.mode == "hardware" and CONFIG.get("BALANCE_MODE") and self.samples < 100:
++            raise ValueError("Balance tuning needs at least 100 samples (about 5 seconds)")
+         if not 1 <= self.speed <= 50:
+             raise ValueError(t("invalid_speed"))
+         if self.mode == "hardware" and (not self.port.strip() or self.port.upper() == "AUTO"):
+@@ -110,13 +113,14 @@
+         self.thread.start()
+ 
+     def _run(self) -> None:
+-        old_config = {key: CONFIG[key] for key in ("MAX_TUNING_ROUNDS", "BUFFER_SIZE")}
++        old_config = {key: CONFIG[key] for key in ("MAX_TUNING_ROUNDS", "BUFFER_SIZE", "BALANCE_ACTIVE")}
+         env = None
+         result = None
+         cleanup = None
+         try:
+             CONFIG.update(MAX_TUNING_ROUNDS=self.options.rounds, BUFFER_SIZE=self.options.samples)
+             options = self.options
++            CONFIG["BALANCE_ACTIVE"] = bool(CONFIG.get("BALANCE_MODE") and options.mode == "hardware")
+             self.sink.publish("lifecycle", phase="connecting", message="正在准备调参环境…")
+             if options.mode == "python":
+                 sim = HeatingSimulator(**dict(zip(("kp", "ki", "kd"), options.pid.values())), setpoint=options.setpoint)
+@@ -131,7 +135,14 @@
+                 if not bridge.connect():
+                     raise RuntimeError(f"无法连接 {options.port}：{bridge.last_error}")
+                 # Hardware PID and setpoint are read from telemetry, never overwritten at connect.
+-                env = HardwareEnv(bridge, {"p": 0., "i": 0., "d": 0.}, self.controller)
++                if CONFIG.get("BALANCE_ACTIVE") and CONFIG.get("BALANCE_REQUIRE_RECOVERY"):
++                    from core.balance_recovery import BalanceRecoveryEnv
++                    env = BalanceRecoveryEnv(
++                        bridge, {"p": 0., "i": 0., "d": 0.}, self.controller,
++                        phase_callback=lambda phase,message: self.sink.publish(
++                            "balance_phase", phase=phase, message=message))
++                else:
++                    env = HardwareEnv(bridge, {"p": 0., "i": 0., "d": 0.}, self.controller)
+                 bridge.send_profile_command("STATUS")
+                 env.prompt_context = build_hardware_prompt_context(options.port, hardware_profile=bridge.hardware_profile)
+                 llm_mode = "generic"
+@@ -179,6 +190,12 @@
+             result["strategy"] = options.strategy
+             if options.strategy == "offline":
+                 result.update(provider="offline", model="conservative_rules")
++        except RecoveryNotVerified as exc:
++            result = {"completed_reason": "disturbance_not_verified", "converged": False,
++                      "recovery_verified": False, "message": str(exc)}
++            if env is not None:
++                result["final_pid"], result["secondary_pid"] = env.get_current_pid()
++            self.sink.publish("balance_phase", phase="not_verified", message=str(exc))
+         except Exception as exc:
+             message = str(exc)
+             for field in ("LLM_API_KEY", "ORCAROUTER_API_KEY"):
+@@ -223,6 +240,8 @@
+         self.round = 1
+         self.metrics: list[dict] = []
+         self.result: dict = {}
++        self.decisions: list[dict] = []
++        self.balance_phases: list[dict] = []
+ 
+     def sample(self, event: dict) -> None:
+         self.writer.writerow({**event, "round": self.round})
+@@ -234,7 +253,7 @@
+ 
+     def export_json(self, path: str) -> None:
+         Path(path).write_text(json.dumps({"sample_count": self.count, "rounds": self.metrics,
+-                                        "result": self.result}, ensure_ascii=False, indent=2), encoding="utf-8")
++                                        "result": self.result, "decisions": self.decisions, "balance_phases": self.balance_phases}, ensure_ascii=False, indent=2), encoding="utf-8")
+ 
+     def close(self) -> None:
+         self.handle.close()
+diff --git a/balance_main.py b/balance_main.py
+new file mode 100644
+--- /dev/null
++++ b/balance_main.py
+@@ -0,0 +1,17 @@
++"""Balance-car desktop entry; shares the existing private configuration."""
++from pathlib import Path
++import os
++import sys
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++from core.config import CONFIG, initialize_runtime_config
++os.chdir(Path(__file__).resolve().parents[2] / 'llm-pid-tuner-desktop')
++initialize_runtime_config(create_if_missing=False, verbose=False)
++CONFIG.update(BALANCE_MODE=True, BALANCE_ACTIVE=False, BALANCE_REQUIRE_RECOVERY=True)
++from desktop.i18n import TEXT
++TEXT.update(window=("LLM PID Tuner - 平衡车修正版 · 抗扰测试", "LLM PID Tuner - Balance edition"),
++            overshoot=("最大角度误差", "PEAK ANGLE ERROR"),
++            col_overshoot=("最大误差 (deg)", "Peak error (deg)"),
++            overshoot_hint=("角度单位，不使用百分比超调", "Degrees; percentage overshoot is unused"),
++            subtitle=("姿态环调参：静止检查 → 提示轻推 → 观察恢复，连续三轮通过才结束。", "Attitude tuning: reduce rocking; require three measured passes."))
++from desktop.app import run_desktop
++run_desktop(language='zh')
+diff --git a/tests/test_balance_car_patch.py b/tests/test_balance_car_patch.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_balance_car_patch.py
+@@ -0,0 +1,82 @@
++import math
++import unittest
++from unittest.mock import patch
++from core.buffer import AdvancedDataBuffer
++from core.config import CONFIG
++from core.balance_metrics import calculate_balance_metrics, require_armed
++from core.tuning_session import create_tuning_session, evaluate_completed_round, finalize_decision
++from core.tuning_engine import run_tuning_engine
++from pid_safety import score_metrics
++
++PID = dict(p=4.,i=.1,d=0.)
++def samples(amplitude=3., target=0., pid=None):
++    return [dict(timestamp=n*50,setpoint=target,input=target+amplitude*math.sin(n*.05*2*math.pi*.8),
++                 pwm=amplitude*4*math.sin(n*.05*2*math.pi*.8),error=0.,**(pid or PID)) for n in range(100)]
++
++class Env:
++    def __init__(self, amplitudes):
++        self.amplitudes=iter(amplitudes); self.pid=dict(PID); self.applied=[]
++    def get_current_pid(self): return dict(self.pid),None
++    def get_setpoint(self): return 0.
++    def get_prompt_context(self): return {}
++    def reset_buffer_state(self): pass
++    def collect_samples(self): return samples(next(self.amplitudes),pid=self.pid)
++    def apply_pid(self,pid,secondary=None): self.pid=dict(pid); self.applied.append(dict(pid))
++class Tuner:
++    def __init__(self): self.calls=0
++    def analyze(self,*args,**kwargs):
++        self.calls+=1
++        return dict(p=4.+.1*self.calls,i=.1,d=.01*self.calls,status='DONE')
++class BalanceTests(unittest.TestCase):
++    def setUp(self):
++        self.config=patch.dict(CONFIG,BALANCE_ACTIVE=True,MAX_TUNING_ROUNDS=3,BUFFER_SIZE=100,
++            REQUIRED_STABLE_ROUNDS=3,GOOD_ENOUGH_AVG_ERROR=.8,GOOD_ENOUGH_STEADY_STATE_ERROR=.6)
++        self.config.start(); self.addCleanup(self.config.stop)
++    def test_zero_and_negative_targets_do_not_create_percent_overshoot(self):
++        results=[calculate_balance_metrics(samples(target=t)) for t in (0.,.00001,-.2)]
++        for result in results:
++            self.assertEqual(result['status'],'OSCILLATING')
++            self.assertEqual(result['overshoot'],0.)
++        self.assertAlmostEqual(score_metrics(results[0]),score_metrics(results[-1]))
++    def test_slow_rocking_is_not_stable(self):
++        m=calculate_balance_metrics(samples())
++        self.assertLess(m['zero_crossings'],30)
++        self.assertEqual(m['status'],'OSCILLATING')
++    def test_zero_error_has_zero_score(self):
++        self.assertEqual(score_metrics(dict(avg_error=0.,steady_state_error=0.,overshoot=0.,status='STABLE')),0.)
++    def test_nonfinite_timestamps_and_mixed_pid_rejected(self):
++        for key,value in [('input',float('nan')),('timestamp',0.),('p',4.1)]:
++            rows=samples(); rows[20][key]=value
++            with self.assertRaises(ValueError): calculate_balance_metrics(rows)
++    def test_done_cannot_bypass_acceptance(self):
++        state=create_tuning_session(initial_pid=PID)
++        for row in samples(): state.buffer.add(row)
++        evaluation=evaluate_completed_round(state,PID)
++        result=finalize_decision(state,evaluation,dict(**PID,status='DONE'))
++        self.assertEqual(result.status,'TUNING')
++        self.assertIsNone(result.completed_reason)
++    def test_engine_continues_done_and_restores_measured_best(self):
++        env=Env([3.,2.,2.1]); tuner=Tuner()
++        result=run_tuning_engine(env,tuner,'generic',emit_console=False)
++        self.assertEqual(tuner.calls,2)
++        self.assertEqual(result['completed_reason'],'max_rounds_reached')
++        self.assertFalse(result['converged'])
++        self.assertEqual(result['final_metrics']['measured_round'],2)
++        self.assertAlmostEqual(result['final_pid']['p'],4.1)
++    def test_three_measured_passes_and_no_model_calls(self):
++        env=Env([.1,.1,.1]); tuner=Tuner()
++        result=run_tuning_engine(env,tuner,'generic',emit_console=False)
++        self.assertEqual(result['completed_reason'],'stable_rounds_reached')
++        self.assertEqual(tuner.calls,0)
++        self.assertTrue(result['converged'])
++    def test_missing_ai_response_does_not_apply_fallback(self):
++        state=create_tuning_session(initial_pid=PID)
++        for row in samples(): state.buffer.add(row)
++        with self.assertRaises(RuntimeError): finalize_decision(state,evaluate_completed_round(state,PID),None)
++    def test_unarmed_car_cannot_be_scored(self):
++        class Bridge:
++            def send_profile_command(self,cmd): return True
++            def read_line(self): return '# STATUS: Armed=0 State=5'
++        with self.assertRaises(RuntimeError): require_armed(Bridge())
++
++if __name__=='__main__': unittest.main()
+diff --git a/tests/test_balance_recovery.py b/tests/test_balance_recovery.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_balance_recovery.py
+@@ -0,0 +1,135 @@
++import math
++import unittest
++from unittest.mock import patch
++from core.balance_recovery import (BalanceRecoveryEnv, RecoveryNotVerified,
++                                   calculate_recovery_metrics, static_failure_reasons)
++from core.buffer import AdvancedDataBuffer
++from core.config import CONFIG
++from core.tuning_engine import run_tuning_engine
++from pid_safety import is_good_enough, maybe_update_best_result
++from tests.test_balance_car_patch import PID, Env, Tuner, samples
++
++
++def recovery_rows(kind='decay'):
++    rows=[]
++    for n in range(201):
++        t=n*.05
++        angle=(2.*math.exp(-t)*math.cos(t*3.) if kind=='decay' else
++               2.*math.cos(t*3.) if kind=='rocking' else
++               .1 if kind=='quiet' else 2.*math.exp(-t/12.)*math.cos(t*3.))
++        rows.append(dict(timestamp=n*50,input=angle,setpoint=0.,pwm=4.*angle,error=-angle,**PID))
++    return rows
++
++class Bridge:
++    def __init__(self,rows): self.rows=iter(rows)
++    def read_line(self): return next(self.rows,None)
++    def parse_data(self,line): return line
++
++class RecoveryTests(unittest.TestCase):
++    def test_motionless_offset_explains_angle_error_instead_of_rocking(self):
++        from core.balance_metrics import calculate_balance_metrics
++        rows=samples(.0)
++        for row in rows: row['input']=.7
++        m=calculate_balance_metrics(rows)
++        with patch.dict(CONFIG,GOOD_ENOUGH_AVG_ERROR=.8,GOOD_ENOUGH_STEADY_STATE_ERROR=.6):
++            reasons=static_failure_reasons(m)
++        self.assertEqual(len(reasons),1)
++        self.assertIn('末段角度误差',reasons[0])
++        self.assertEqual(m['peak_to_peak_deg'],0.)
++    def test_ready_static_data_has_no_failure_reason(self):
++        from core.balance_metrics import calculate_balance_metrics
++        with patch.dict(CONFIG,GOOD_ENOUGH_AVG_ERROR=.8,GOOD_ENOUGH_STEADY_STATE_ERROR=.6):
++            self.assertEqual(static_failure_reasons(calculate_balance_metrics(samples(.1))),[])
++    def test_decaying_response_passes_and_records_settling(self):
++        m=calculate_recovery_metrics(recovery_rows(),0.)
++        self.assertTrue(m['recovery_passed'])
++        self.assertLess(m['settling_time_s'],5.)
++        self.assertLess(m['decay_ratio'],.5)
++    def test_persistent_and_slow_oscillation_fail(self):
++        for kind in ('rocking','slow'):
++            m=calculate_recovery_metrics(recovery_rows(kind),0.)
++            self.assertFalse(m['recovery_passed'])
++    def test_quiet_data_cannot_prove_recovery(self):
++        m=calculate_recovery_metrics(recovery_rows('quiet'),0.)
++        self.assertFalse(m['recovery_passed'])
++        self.assertFalse(is_good_enough(m))
++    def test_short_trial_cannot_pass(self):
++        with self.assertRaises(RecoveryNotVerified):
++            calculate_recovery_metrics(recovery_rows()[:100],0.)
++    def test_unverified_static_trial_cannot_be_best(self):
++        metrics=dict(recovery_required=True,recovery_tested=False,metric_profile='balance_car_v1')
++        self.assertIsNone(maybe_update_best_result(None,PID,metrics,1))
++    def test_static_only_engine_never_converges(self):
++        env=Env([.1,.1,.1])
++        env.recovery_metrics=dict(recovery_required=True,recovery_tested=False,recovery_passed=False)
++        with patch.dict(CONFIG,BALANCE_ACTIVE=True,BALANCE_REQUIRE_RECOVERY=True,
++                        BUFFER_SIZE=100,MAX_TUNING_ROUNDS=3,REQUIRED_STABLE_ROUNDS=3):
++            result=run_tuning_engine(env,Tuner(),'generic',emit_console=False)
++        self.assertFalse(result['converged'])
++        self.assertFalse(result['recovery_verified'])
++    def test_three_recovery_passes_converge(self):
++        class RecoveryEnv(Env):
++            def collect_samples(self):
++                rows=recovery_rows()
++                self.recovery_metrics=calculate_recovery_metrics(rows,0.)
++                return rows
++        env=RecoveryEnv([]); tuner=Tuner()
++        with patch.dict(CONFIG,BALANCE_ACTIVE=True,BALANCE_REQUIRE_RECOVERY=True,
++                        BUFFER_SIZE=100,MAX_TUNING_ROUNDS=3,REQUIRED_STABLE_ROUNDS=3):
++            result=run_tuning_engine(env,tuner,'generic',emit_console=False)
++        self.assertTrue(result['converged'])
++        self.assertTrue(result['recovery_verified'])
++        self.assertEqual(tuner.calls,0)
++    def test_environment_waits_then_observes_full_trial(self):
++        rows=recovery_rows()
++        # The trigger requires three consecutive displaced samples.
++        for n in range(3): rows[n]['input']=2.; rows[n]['pwm']=8.
++        for row in rows: row['timestamp']+=5000
++        phases=[]
++        env=BalanceRecoveryEnv(Bridge(rows),PID,phase_callback=lambda p,m:phases.append(p))
++        with patch('core.adapters.HardwareEnv.collect_samples',return_value=samples(.1)), \
++             patch('core.balance_recovery.require_armed'):
++            result=env.collect_samples()
++        self.assertGreaterEqual(result[-1]['timestamp']-result[0]['timestamp'],10000)
++        self.assertIn('waiting_push',phases)
++        self.assertIn('recovering',phases)
++        self.assertTrue(env.recovery_metrics['recovery_tested'])
++    def test_timeout_is_unverified_without_ai_or_gain_change(self):
++        env=BalanceRecoveryEnv(Bridge([]),PID)
++        with patch('core.adapters.HardwareEnv.collect_samples',return_value=samples(.1)), \
++             patch('core.balance_recovery.WAIT_SECONDS',0.):
++            with self.assertRaises(RecoveryNotVerified): env.collect_samples()
++        self.assertFalse(env.recovery_metrics['recovery_tested'])
++    def test_effective_inner_target_can_change_after_push(self):
++        row=recovery_rows()[0]; row['setpoint']=.12
++        env=BalanceRecoveryEnv(Bridge([row]),PID)
++        env.expected_pid=PID; env.expected_setpoint=0.
++        import time
++        actual=env._read_sample(time.monotonic()+.1)
++        self.assertEqual(actual['setpoint'],.12)
++    def test_tracking_a_moving_target_cannot_hide_physical_rocking(self):
++        rows=recovery_rows('rocking')
++        for row in rows: row['setpoint']=row['input']
++        m=calculate_recovery_metrics(rows,0.)
++        self.assertFalse(m['recovery_passed'])
++        self.assertGreater(m['late_peak_error_deg'],1.)
++        self.assertEqual(m['nominal_setpoint_deg'],0.)
++    def test_variable_inner_target_does_not_fail_good_recovery(self):
++        rows=recovery_rows()
++        for n,row in enumerate(rows): row['setpoint']=.2*math.sin(n*.1)
++        m=calculate_recovery_metrics(rows,0.)
++        self.assertTrue(m['recovery_passed'])
++        self.assertLess(m['effective_setpoint_min_deg'],0.)
++        self.assertGreater(m['effective_setpoint_max_deg'],0.)
++    def test_explicit_setpoint_command_still_interrupts_verification(self):
++        env=BalanceRecoveryEnv(Bridge(['# Setpoint Updated: 1.000 deg from upright']),PID)
++        env.expected_pid=PID
++        import time
++        with self.assertRaises(RecoveryNotVerified): env._read_sample(time.monotonic()+.1)
++    def test_gain_changes_during_wait_reject_trial(self):
++        row=recovery_rows()[0]; row['p']=4.2
++        env=BalanceRecoveryEnv(Bridge([row]),PID)
++        with patch('core.adapters.HardwareEnv.collect_samples',return_value=samples(.1)):
++            with self.assertRaises(RecoveryNotVerified): env.collect_samples()
++
++if __name__=='__main__': unittest.main()
+diff --git a/tests/recovery_ui_smoke.py b/tests/recovery_ui_smoke.py
+new file mode 100644
+--- /dev/null
++++ b/tests/recovery_ui_smoke.py
+@@ -0,0 +1,28 @@
++import json
++from pathlib import Path
++import tempfile
++from PySide6.QtWidgets import QApplication
++from PySide6.QtCore import QTimer
++import runpy
++app=QApplication([])
++checks=[]
++def check():
++    windows=[w for w in app.topLevelWidgets() if hasattr(w,'balance_instruction')]
++    assert len(windows)==1
++    w=windows[0]
++    assert '抗扰测试' in w.windowTitle()
++    assert w.mode.currentData()=='hardware'
++    w._event(dict(type='balance_phase',phase='waiting_push',message='请轻推一下后松手'))
++    assert '轻推' in w.balance_instruction.text()
++    with tempfile.TemporaryDirectory() as directory:
++        output=Path(directory)/'report.json'
++        w.archive.export_json(str(output))
++        report=json.loads(output.read_text(encoding='utf-8'))
++        assert report['balance_phases'][0]['phase']=='waiting_push'
++    checks.append(True)
++    w.close()
++    app.quit()
++QTimer.singleShot(800,check)
++runpy.run_path(str(Path(__file__).resolve().parents[1]/'balance_main.py'),run_name='__main__')
++assert checks
++print('RECOVERY_UI_AND_REPORT_OK')
+diff --git a/BALANCE-README.md b/BALANCE-README.md
+new file mode 100644
+--- /dev/null
++++ b/BALANCE-README.md
+@@ -0,0 +1,47 @@
++# 平衡车修正版（基于 v2.5.0）
++
++从上一级目录的 StartBalanceTuner.cmd 启动。保留原版 exe，修正版共享原版 config.json 与 API 配置，无需重新填写密钥。
++
++## 使用
++
++1. 当前固件保持已恢复的姿态 PID 4 / 0.1 / 0，速度、转向环保持原来的关闭状态。
++2. 在串口发送 `standby`、`mode tune`、`balance arm`，让车进入实际平衡，再关闭 VOFA 释放 COM15。
++3. 启动修正版，默认硬件 COM15 / AI / 100 点 / 12 轮。启动前确认端口。无需修改或应用目标值，目标与 PID 以固件回传为准。
++4. 点击开始。若打开串口导致开发板复位，程序会报告未平衡；先重新开启平衡，不能将待机数据算作调参结果。
++5. 结束后导出 JSON；每轮包含实测 PID、角度/角速度估计指标，decisions 包含限幅后的建议 PID。建议值以随后一轮的实测 PID 为实际生效证据。
++
++## 修复
++
++- 平衡车目标接近零，不计算百分比超调，界面原超调卡片改为最大角度误差。
++- 评分综合角度 RMS、摆幅、由角度差分估计的角速度 RMS、PWM 变化。不是实际陀螺仪/轮速数据。
++- 每轮至少 4 秒；角度 RMS <= 0.8 deg、峰值误差 <= 2 deg、峰峰摆幅 <= 2 deg、估计角速度 RMS <= 6 deg/s；同时平均误差 <= 0.8 deg、末段平均误差 <= 0.6 deg，连续三轮达标才宣布收敛。这是首轮验收标准，可根据真实结果调整。
++- 模型 DONE 不能跳过实测验收，低平均误差也不能跳过；达到轮数上限只表示本次结束，不表示调好了。
++- 每轮丢弃等待 AI 时累积的旧串口数据，核对采样前后 Armed=1 / State=1；时间戳断裂或混合 PID 数据停止本次评分。
++- 最后一轮只测量，不下发未经测量的新参数；到上限时选择本次评分最好的已测 PID。报告标注其历史测量轮次，回设不等于重新实测通过。
++- 修复原版将误差 0 当作缺失值的评分错误。AI 请求失败时终止本次调参，不套用原版热控兜底算法。
++
++## 范围
++
++仅调共享姿态环，不是左右独立速度 PID，也不能用这组数据验证轮子完全静止或位置不漂移。未修改/烧录固件。修复已通过离线数据和桌面启动检查，真实调参改善仍需实车报告确认。
++
++
++## 抗扰测试版更新
++
++关闭先前修正版窗口后，重新从 StartBalanceTuner.cmd 启动；标题应有“抗扰测试”。原始 exe 和 API 配置不变。
++
++每轮约 5 秒静止检查，通过后顶部提示“请轻推车身一下后立即松手”。没有提示时不要推。
++以静止角度为基准，偏离至少 1.5 度且连续三个采样点才触发；等待上限 45 秒。
++触发后完全松手，连续观察 10 秒，不要再次推动，也不要一直扶着车；每次推动尽量一致。软件不测量手的推力。
++恢复判据：误差回到 0.8 度以内、估计角速度小于 6 度/秒且持续稳定至窗口结束至少 2 秒，恢复时间不超过 5 秒；末四秒最大误差不超过前两秒最大误差的一半，且末段静止指标达标。
++三个完整抗扰试验连续通过才宣布收敛。未检测到推力引起的角度变化、数据中断、PID 在测试中变化或收到手动 SETPOINT 更新均不算通过。
++若原本就在持续往复，先用该段数据调整姿态参数，不要求再推一次；静止恢复达标后才进入轻推测试。
++JSON 含 recovery_verified、每轮 recovery_tested/recovery_passed、settling_time_s（null 表示未持续恢复）、decay_ratio 和 balance_phases（含采样边界）。
++这些阈值是首次验收设置，离线通过不代表实车已通过。
++
++
++### 内部姿态目标与 SP 的区别
++
++固件 CSV 的 setpoint 是姿态内环实际目标，包含速度反馈产生的倾角，因此轻推后它可以变化。这不再被当成手动修改 SP。
++抗扰版界面 SP 固定为 0；恢复评分使用车身相对校准零点的物理角度，而不是随速度环变化的跟踪误差。
++原始 CSV 仍保留固件回传的实际 setpoint，报告另存 effective_setpoint_min_deg/max_deg，nominal_setpoint_deg=0。
++程序不自动修改速度环 PID；因此若速度环开启，实际验证的是当前两环协同下的恢复表现，不能据此宣称纯姿态环已单独调好。
